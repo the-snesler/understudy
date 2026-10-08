@@ -1,0 +1,17 @@
+# Copy to compose.yml and adjust. The container runs as uid 1000 ("node"); a bind-mounted ./data
+# directory must be writable by that user.
+services:
+  server-rpc:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      # Password for the web UI (any username). Strongly recommended: the UI holds your Discord tokens.
+      UI_PASSWORD: change-me
+      # The URL you open the UI at, if it differs from what the container sees (e.g. behind a
+      # reverse proxy). Used for the Discord OAuth redirect URI.
+      # PUBLIC_URL: https://rpc.example.com
+      # LOG_LEVEL: info

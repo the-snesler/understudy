@@ -1,0 +1,8 @@
+node_modules
+dist
+data
+spike
+test
+PLAN.md
+.git
+.env

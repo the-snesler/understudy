@@ -1,0 +1,8 @@
+# planning notes
+PLAN.md
+
+node_modules/
+dist/
+data/
+.env
+*.log
