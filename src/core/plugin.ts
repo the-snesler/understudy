@@ -39,6 +39,8 @@ export interface BaseContext<C> {
   signal: AbortSignal;
   /** URL path under which this instance's `routes` are mounted, e.g. `/plugins/discord`. */
   routeBase: string;
+  /** URL path under which this instance's `publicRoutes` are mounted, e.g. `/public/tautulli`. */
+  publicBase: string;
 }
 
 export interface SourceContext<C> extends BaseContext<C> {
@@ -70,6 +72,11 @@ export interface Instance {
   status(): InstanceStatus;
   /** Register extra web routes, mounted under `ctx.routeBase`. */
   routes?(app: Hono): void;
+  /**
+   * Register routes that must be reachable without the UI password (e.g. images fetched by
+   * Discord, or incoming webhooks), mounted under `ctx.publicBase`. Authenticate them yourself.
+   */
+  publicRoutes?(app: Hono): void;
   /** Plugin-specific UI shown on the instance page above the settings form (forms, actions). */
   panel?(props: PanelProps): Child;
   /** Read-only status UI that the instance page re-renders every few seconds. */

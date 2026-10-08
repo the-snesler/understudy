@@ -16,8 +16,8 @@ export interface PublisherConfig {
   applicationId: string;
   /** Source instance ids, highest priority first. Unlisted sources rank after these. */
   sourcePriority: string[];
-  /** Rank paused activities below playing ones, whatever their source priority. */
-  pausedLast: boolean;
+  /** Paused activities: hidden, ranked below playing ones, or treated like playing ones. */
+  paused: 'hide' | 'last' | 'show';
   statusDisplay: StatusDisplay;
   /** Re-send interval; keeps the session alive (expires after ~20 min) and recovers from Invisible. */
   refreshMinutes: number;
@@ -193,10 +193,12 @@ export function pick(state: HubState, config: PublisherConfig, sources: SourceIn
     const i = config.sourcePriority.indexOf(id);
     return i === -1 ? config.sourcePriority.length : i;
   };
-  const candidates = state.activities.filter((a) => enabled.has(a.sourceId));
+  const candidates = state.activities.filter(
+    (a) => enabled.has(a.sourceId) && !(config.paused === 'hide' && a.activity.paused),
+  );
   candidates.sort(
     (a, b) =>
-      (config.pausedLast ? Number(!!a.activity.paused) - Number(!!b.activity.paused) : 0) ||
+      (config.paused === 'last' ? Number(!!a.activity.paused) - Number(!!b.activity.paused) : 0) ||
       rank(a.sourceId) - rank(b.sourceId) ||
       b.changedAt - a.changedAt,
   );

@@ -26,7 +26,7 @@ function setup(opts: { ready?: boolean; gate?: PresenceGate; session?: FakeSessi
   const session = opts.session ?? new FakeSession();
   let ready = opts.ready ?? true;
   const publisher = new Publisher({
-    config: { applicationId: '1', sourcePriority: [], pausedLast: true, statusDisplay: 'details', refreshMinutes: 5 },
+    config: { applicationId: '1', sourcePriority: [], paused: 'last', statusDisplay: 'details', refreshMinutes: 5 },
     session,
     log: quietLogger(),
     sources,

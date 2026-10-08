@@ -72,7 +72,7 @@ describe('pick', () => {
   const config: PublisherConfig = {
     applicationId: '1',
     sourcePriority: ['plex', 'switch'],
-    pausedLast: true,
+    paused: 'last',
     statusDisplay: 'details',
     refreshMinutes: 5,
   };
@@ -90,10 +90,14 @@ describe('pick', () => {
     expect(pick(state, { ...config, sourcePriority: [] }, sources)?.sourceId).toBe('other');
   });
 
-  it('ranks paused activities last when configured', () => {
+  it('hides, ranks last, or shows paused activities', () => {
     const state = { activities: [entry('plex', 100, true), entry('switch', 50)] };
     expect(pick(state, config, sources)?.sourceId).toBe('switch');
-    expect(pick(state, { ...config, pausedLast: false }, sources)?.sourceId).toBe('plex');
+    expect(pick(state, { ...config, paused: 'show' }, sources)?.sourceId).toBe('plex');
+    expect(pick(state, { ...config, paused: 'hide' }, sources)?.sourceId).toBe('switch');
+    const onlyPaused = { activities: [entry('plex', 100, true)] };
+    expect(pick(onlyPaused, config, sources)?.sourceId).toBe('plex');
+    expect(pick(onlyPaused, { ...config, paused: 'hide' }, sources)).toBeNull();
   });
 
   it('ignores disabled sources', () => {

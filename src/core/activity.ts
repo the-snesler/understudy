@@ -5,7 +5,7 @@
 export type ActivityKind = 'playing' | 'watching' | 'listening';
 
 export interface ActivityImage {
-  /** Public HTTPS URL. */
+  /** Public HTTPS URL. Outputs may also accept their own asset references (e.g. a Discord asset key). */
   url: string;
   /** Hover text. */
   text?: string;

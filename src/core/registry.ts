@@ -33,6 +33,7 @@ interface Live {
   instance: Instance;
   abort: AbortController;
   app: Hono;
+  publicApp: Hono;
   unsubscribe?: () => void;
 }
 
@@ -228,6 +229,7 @@ export class Registry {
 
     const abort = new AbortController();
     const routeBase = `/plugins/${cfg.id}`;
+    const publicBase = `/public/${cfg.id}`;
     const base = {
       instanceId: cfg.id,
       config: parsed.data,
@@ -236,6 +238,7 @@ export class Registry {
       env: this.opts.env,
       signal: abort.signal,
       routeBase,
+      publicBase,
     };
 
     try {
@@ -266,7 +269,9 @@ export class Registry {
       }
       const app = new Hono().basePath(routeBase);
       instance.routes?.(app);
-      this.live.set(cfg.id, { instance, abort, app, unsubscribe });
+      const publicApp = new Hono().basePath(publicBase);
+      instance.publicRoutes?.(publicApp);
+      this.live.set(cfg.id, { instance, abort, app, publicApp, unsubscribe });
       await instance.start();
       log.info('started');
     } catch (err) {

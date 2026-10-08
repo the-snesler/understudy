@@ -38,10 +38,14 @@ const configSchema = z.object({
       description:
         'Source instance ids, one per line, highest priority first. Discord shows one activity at a time; unlisted sources rank after these, and ties go to the most recent.',
     }),
-  pausedLast: z
-    .boolean()
-    .default(true)
-    .meta({ title: 'Prefer playing over paused', description: 'Rank paused activities below playing ones regardless of priority.' }),
+  paused: z
+    .enum(['hide', 'last', 'show'])
+    .default('hide')
+    .meta({
+      title: 'Paused activities',
+      description:
+        '"hide" = clear your status while paused, like Spotify does. "last" = show paused activities only when nothing is playing. "show" = treat them like playing ones.',
+    }),
   statusDisplay: z
     .enum(['details', 'name', 'state'])
     .default('details')
@@ -97,7 +101,7 @@ function createDiscord(ctx: OutputContext<Config>) {
   const stored = read();
   if (stored.tokens && stored.tokens.clientId !== config.applicationId) {
     log.info('Application ID changed; forgetting the previous Discord connection');
-    void state.set({});
+    state.set({}).catch((err: unknown) => log.error(`Could not save state: ${errorMessage(err)}`));
   }
 
   let refreshing: Promise<string> | undefined;

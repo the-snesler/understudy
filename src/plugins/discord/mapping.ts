@@ -73,8 +73,13 @@ function text(value: string | undefined): string | undefined {
   return v.length < 2 ? `${v} ` : v;
 }
 
+/** Discord app asset keys (Developer Portal → Rich Presence → Art Assets) are lowercase names. */
+const ASSET_KEY = /^[a-z0-9_.-]+$/;
+
+/** An external HTTPS URL, or the key of an asset uploaded to the Discord app. */
 function image(img: ActivityImage | undefined): { url: string; text?: string } | undefined {
-  if (!img || !isHttpsUrl(img.url) || img.url.length > MAX_ASSET) return undefined;
+  if (!img || img.url.length > MAX_ASSET) return undefined;
+  if (!isHttpsUrl(img.url) && !ASSET_KEY.test(img.url)) return undefined;
   return { url: img.url, text: text(img.text) };
 }
 

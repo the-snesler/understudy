@@ -22,6 +22,7 @@ const registry = new Registry({ plugins, config, state, hub, log, env: { publicU
 
 await registry.ensureInstances([
   { plugin: 'discord', enabled: true },
+  { plugin: 'tautulli', enabled: true },
   { plugin: 'manual', enabled: true },
 ]);
 await registry.startAll();

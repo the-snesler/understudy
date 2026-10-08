@@ -5,8 +5,8 @@ running. It collects "now playing" activity from **sources** and sends it to **o
 there's one output: Discord, which sets your presence through Discord's (undocumented) headless
 sessions API.
 
-Status: early. Sources so far: **Manual** (set an activity from the web UI). Plex (via Tautulli)
-and Nintendo Switch (via nxapi) are next.
+Status: early. Sources so far: **Plex** (via Tautulli) and **Manual** (set an activity from the
+web UI). Nintendo Switch (via nxapi) is next.
 
 ## Running
 
@@ -28,7 +28,7 @@ pnpm test
 | `PORT` | `8080` | |
 | `DATA_DIR` | `./data` (`/data` in Docker) | `config.json` (settings) and `state.json` (tokens). Both are mode 600. |
 | `UI_PASSWORD` | unset | Basic-auth password for the web UI (any username). Set it: the UI holds your Discord tokens. |
-| `PUBLIC_URL` | request origin | The URL you open the UI at, if that differs from what the server sees (e.g. behind a reverse proxy). Used for the OAuth redirect URI. |
+| `PUBLIC_URL` | request origin | The URL you open the UI at, if that differs from what the server sees (e.g. behind a reverse proxy). Used for the OAuth redirect URI, and, if it's public HTTPS, for the optional artwork proxy. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
 ## Discord setup
@@ -46,12 +46,30 @@ machine), copy the URL from the address bar and paste it into "Redirect page did
 
 Things to know:
 - Discord shows **one** headless activity per app at a time. When several sources are active, the
-  Discord output picks one: by its source priority list, then playing before paused, then the most
-  recent.
+  Discord output picks one: by its source priority list, then the most recent.
+- Paused activities are hidden by default, like Spotify's integration. The Discord settings can
+  rank them last or show them instead.
 - While a headless session is active, your account appears **online** even if no Discord client
   is open. An option to publish only while you're online on a real client is planned.
 - Activities don't show while you're Invisible. One reappears on the next re-send after you go back
   Online (every 5 minutes by default).
+
+## Plex (Tautulli) setup
+
+On the Plex (Tautulli) page, set:
+- the **Tautulli URL** and **API key** (Tautulli → Settings → Web Interface → API);
+- **Users**: your Plex username. Otherwise anyone streaming from your server shows up as you.
+
+Discord loads artwork itself, so images must be public HTTPS URLs. In order:
+1. **TMDB posters** for movies and shows, if you add a TMDB API key or read access token.
+2. **iTunes album art** for music (no key needed).
+3. Optionally, **Plex artwork served through this app**. This needs `PUBLIC_URL` to be an HTTPS
+   address Discord can reach. Only signed image URLs under `/public/` work without the UI password.
+4. A **fallback image**: a URL, or the key of an image uploaded to your Discord app (Developer
+   Portal → Rich Presence → Art Assets).
+
+The text lines are templates, e.g. `S{seasonPadded}E{episodePadded}[ · {episodeTitle}]`. Text in
+`[brackets]` is dropped when a variable inside is empty. The settings page lists every variable.
 
 ## Architecture
 
@@ -60,11 +78,13 @@ src/
   core/        activity model, hub, plugin interfaces, registry, JSON stores, logger
   plugins/     sources and outputs; register new ones in plugins/index.ts
     discord/   OAuth (PKCE), REST client, headless session, activity mapping, publisher
+    tautulli/  Plex via Tautulli: polling, filters, templates, artwork (TMDB, iTunes, signed proxy)
     manual/    the hand-driven test source
   web/         Hono + JSX server-rendered UI with htmx, and settings forms built from zod schemas
 ```
 
 A **source** calls `ctx.publish(nowPlaying | null)`. An **output** gets `onState(hubState)` with
 every source's current activity. A plugin declares its settings as a zod schema, which also
-generates its settings form. Plugins can add their own routes (under `/plugins/<instance>/`) and
-UI panels. Each configured instance is restarted when its settings are saved.
+generates its settings form. Plugins can add their own routes (under `/plugins/<instance>/`,
+behind the UI password), public routes (under `/public/<instance>/`, for images and webhooks; they
+must authenticate requests themselves) and UI panels. Each configured instance is restarted when its settings are saved.

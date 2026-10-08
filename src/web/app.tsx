@@ -43,6 +43,13 @@ export function createWebApp(opts: WebOptions): Hono {
     return c.body(HTMX);
   });
 
+  // Plugin routes that must work without the UI password (images for Discord, webhooks).
+  app.all('/public/:id/*', (c) => {
+    const view = registry.get(c.req.param('id'));
+    if (!view?.live) return c.text('Not found', 404);
+    return view.live.publicApp.fetch(c.req.raw);
+  });
+
   if (opts.uiPassword) {
     const password = opts.uiPassword;
     app.use('*', basicAuth({ verifyUser: (_user, pass) => pass === password, realm: 'server-rpc' }));
@@ -137,7 +144,7 @@ export function createWebApp(opts: WebOptions): Hono {
     const id = view.config.id;
     const pagePath = `/instances/${id}`;
     const props: PanelProps = { pagePath, origin: origin(c) };
-    const notice = NOTICES[c.req.query('notice') ?? ''];
+    const notice = NOTICES[c.req.query('notice') ?? ''] ?? c.req.query('message');
     const error = c.req.query('error');
     const plugin = view.plugin;
     return c.html(
