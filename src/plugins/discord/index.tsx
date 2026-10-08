@@ -5,6 +5,8 @@ import { errorMessage } from '../../core/log.js';
 import { defineOutput, type OutputContext, type PanelProps } from '../../core/plugin.js';
 import { Layout, Notice, timeAgo } from '../../web/layout.js';
 import { DiscordApi, type TokenProvider } from './api.js';
+import { GatewayPresence } from './gateway-presence.js';
+import { DiscordGateway, onlineCheck, realSessions, type GatewaySession } from './gateway.js';
 import { HeadlessSession } from './headless.js';
 import {
   buildAuthorizeUrl,
@@ -17,7 +19,7 @@ import {
   revokeToken,
   type TokenSet,
 } from './oauth.js';
-import { Publisher, type PublishedState } from './publisher.js';
+import { Publisher, type PresenceGate, type PublishedState } from './publisher.js';
 
 const configSchema = z.object({
   applicationId: z
@@ -63,8 +65,20 @@ const configSchema = z.object({
     .meta({
       title: 'Refresh interval (minutes)',
       description:
-        'How often the activity is re-sent. Sessions expire after ~20 minutes, and an activity hidden while you were Invisible only reappears on the next send.',
+        'Headless mode only (when "Only while you are on Discord" is off): how often the activity is re-sent. Headless sessions expire after ~20 minutes, and an activity hidden while you were Invisible only reappears on the next send.',
     }),
+  onlyWhenOnline: z
+    .boolean()
+    .default(true)
+    .meta({
+      title: 'Only while you are on Discord',
+      description:
+        'Show the activity only while one of your real Discord clients (desktop, web or mobile) is online, with the same status. It is carried by an extra Discord connection that stays invisible otherwise. Turn off to show it even when Discord is closed: that uses a headless session, which makes you appear online and lingers for a few minutes after it is removed.',
+    }),
+  onlineStatuses: z
+    .array(z.enum(['online', 'idle', 'dnd']))
+    .default(['online', 'idle', 'dnd'])
+    .meta({ title: 'Statuses that count as on Discord', description: 'Which statuses of your real clients allow the activity to show.' }),
 });
 
 type Config = z.infer<typeof configSchema>;
@@ -83,6 +97,8 @@ interface PersistedState {
   tokens?: StoredTokens;
   user?: DiscordUser;
   sessionToken?: string;
+  /** Our recent Gateway session ids, newest last. */
+  gatewaySessions?: string[];
 }
 
 /** Refresh the access token when it has less than this left (tokens last 7 days). */
@@ -143,12 +159,42 @@ function createDiscord(ctx: OutputContext<Config>) {
   };
 
   const api = new DiscordApi({ apiBase: endpoints.apiBase, tokens, log });
-  const session = new HeadlessSession(
+  const headless = new HeadlessSession(
     api,
     { load: () => read().sessionToken, save: (sessionToken) => write({ sessionToken }) },
     log,
   );
-  const publisher = new Publisher({ config, session, log, sources: ctx.sources, ready: connected });
+
+  // "Only while you are on Discord": an invisible Gateway connection watches the user's sessions
+  // and carries the activity itself. Otherwise, a headless session.
+  const gateway = new DiscordGateway({
+    token: () => tokens.accessToken(),
+    refreshToken: () => tokens.forceRefresh(),
+    log: log.child(`${ctx.instanceId}/gateway`),
+    onChange: () => publisher.kick(),
+    previousSessionIds: () => read().gatewaySessions ?? [],
+    onSessionId: (id) => {
+      const ids = [...(read().gatewaySessions ?? []).filter((x) => x !== id), id].slice(-10);
+      write({ gatewaySessions: ids }).catch((err: unknown) => log.error(`Could not save state: ${errorMessage(err)}`));
+    },
+  });
+  const session = config.onlyWhenOnline ? new GatewayPresence(gateway, api, config.applicationId, log) : headless;
+  const gate: PresenceGate = {
+    check() {
+      if (!config.onlyWhenOnline) return { allowed: true };
+      if (!gateway.informed) {
+        const why = gateway.state === 'failed' ? `can't watch your status (${gateway.lastError})` : 'checking your Discord status';
+        return { allowed: false, reason: why };
+      }
+      return onlineCheck(gateway.sessions, gateway.ownSessionIds, config.onlineStatuses);
+    },
+  };
+  const syncGateway = () => {
+    if (config.onlyWhenOnline && connected()) gateway.start();
+    else if (gateway.state !== 'stopped') gateway.stop();
+  };
+
+  const publisher = new Publisher({ config, session, log, sources: ctx.sources, ready: connected, gate });
 
   function redirectUri(c: Context): string {
     const origin = ctx.env.publicUrl ?? new URL(c.req.url).origin;
@@ -182,6 +228,7 @@ function createDiscord(ctx: OutputContext<Config>) {
     } catch (err) {
       log.warn(`Connected, but could not look up the user: ${errorMessage(err)}`);
     }
+    syncGateway();
     publisher.kick(true);
   }
 
@@ -200,13 +247,19 @@ function createDiscord(ctx: OutputContext<Config>) {
   return {
     start() {
       publisher.start();
+      syncGateway();
+      // Switched from headless mode: withdraw what that left behind (as far as Discord allows).
+      if (config.onlyWhenOnline && headless.active && connected()) {
+        headless.clear().catch((err: unknown) => log.warn(`Could not delete the old headless session: ${errorMessage(err)}`));
+      }
     },
     async stop() {
       try {
         await publisher.stop();
       } catch (err) {
-        log.warn(`Could not clear the headless session: ${errorMessage(err)}`);
+        log.warn(`Could not withdraw the activity: ${errorMessage(err)}`);
       }
+      gateway.stop();
     },
     onState(s: Parameters<Publisher['onState']>[0]) {
       publisher.onState(s);
@@ -264,9 +317,11 @@ function createDiscord(ctx: OutputContext<Config>) {
       app.post('/disconnect', async (c) => {
         try {
           await session.clear();
+          if (headless.active) await headless.clear();
         } catch (err) {
-          log.warn(`Could not delete the headless session: ${errorMessage(err)}`);
+          log.warn(`Could not withdraw the activity: ${errorMessage(err)}`);
         }
+        gateway.stop();
         const t = read().tokens;
         if (t) {
           await revokeToken({ endpoints, clientId: t.clientId, token: t.refreshToken ?? t.accessToken }).catch(
@@ -274,6 +329,7 @@ function createDiscord(ctx: OutputContext<Config>) {
           );
         }
         await state.set({});
+        syncGateway();
         publisher.kick();
         log.info('Disconnected from Discord');
         return c.redirect(`${pagePath}?notice=disconnected`);
@@ -359,10 +415,50 @@ function createDiscord(ctx: OutputContext<Config>) {
             </p>
           )}
           {publisher.lastError && <Notice kind="error">Last error: {publisher.lastError}</Notice>}
+          {config.onlyWhenOnline && connected() && <SessionsView gateway={gateway} />}
         </div>
       );
     },
   };
+}
+
+function SessionsView({ gateway }: { gateway: DiscordGateway }) {
+  const own = gateway.ownSessionIds;
+  const real = realSessions(gateway.sessions, own);
+  const role = (s: GatewaySession) =>
+    s.session_id === gateway.sessionId
+      ? 'this app (Gateway)'
+      : own.has(s.session_id)
+        ? 'this app (earlier connection)'
+        : s.session_id.startsWith('h:')
+          ? 'this app (headless)'
+          : s.session_id === 'all'
+            ? 'combined'
+            : 'client';
+  const label = { connecting: 'connecting', ready: 'connected', reconnecting: 'reconnecting', stopped: 'stopped', failed: 'failed' }[gateway.state];
+  return (
+    <details style="margin-top: .75rem">
+      <summary class="small">
+        Your Discord clients: {gateway.informed ? (real.length ? real.map((s) => s.status).join(', ') : 'none') : 'unknown'} · Gateway {label}
+        {gateway.presence && ` · ours: ${gateway.presence.status}${gateway.presence.activities.length ? ' with activity' : ''}`}
+      </summary>
+      {gateway.lastError && gateway.state !== 'ready' && <p class="small muted">{gateway.lastError}</p>}
+      {gateway.sessions.length > 0 && (
+        <table class="small">
+          <tbody>
+            {gateway.sessions.map((s) => (
+              <tr>
+                <td>{role(s)}</td>
+                <td>{[s.client_info?.client, s.client_info?.os].filter(Boolean).join(' / ')}</td>
+                <td>{s.status}</td>
+                <td class="muted">{(s.activities ?? []).map((a) => a.name).join(', ')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </details>
+  );
 }
 
 function ActivityPreview({ pub }: { pub: PublishedState }) {

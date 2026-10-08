@@ -135,6 +135,14 @@ describe('settings form parsing', () => {
     );
     expect(raw).toEqual({ title: 'T', apiKey: 'kept', count: 7, on: false, tags: ['a', 'b', 'c'] });
   });
+
+  it('parses checkbox groups for enum arrays', () => {
+    const schema = z.object({ statuses: z.array(z.enum(['online', 'idle', 'dnd'])).default(['online']) });
+    expect(parseSettingsForm(schema, { 'cfg.statuses.__set': '1', 'cfg.statuses': ['online', 'dnd'] }, {})).toEqual({ statuses: ['online', 'dnd'] });
+    expect(parseSettingsForm(schema, { 'cfg.statuses.__set': '1', 'cfg.statuses': 'idle' }, {})).toEqual({ statuses: ['idle'] });
+    expect(parseSettingsForm(schema, { 'cfg.statuses.__set': '1' }, {})).toEqual({ statuses: [] });
+    expect(parseSettingsForm(schema, {}, {})).toEqual({});
+  });
 });
 
 describe('web app', () => {

@@ -49,10 +49,17 @@ Things to know:
   Discord output picks one: by its source priority list, then the most recent.
 - Paused activities are hidden by default, like Spotify's integration. The Discord settings can
   rank them last or show them instead.
-- While a headless session is active, your account appears **online** even if no Discord client
-  is open. An option to publish only while you're online on a real client is planned.
-- Activities don't show while you're Invisible. One reappears on the next re-send after you go back
-  Online (every 5 minutes by default).
+- By default the activity is shown only while one of your real Discord clients (desktop, web or
+  mobile) is online, idle or dnd ("Only while you are on Discord"). This keeps one extra Discord
+  connection open with your login.
+  - That connection carries the activity, with the same status as your real clients.
+  - It's invisible whenever there's nothing to show, so others see exactly the status they would
+    without this app.
+- With that turned off, the activity is published as a **headless session** instead, which works
+  with Discord closed. The catches:
+  - a headless session makes you appear online, even while Invisible;
+  - Discord doesn't really delete one when asked: it lingers, holding you online with no activity,
+    for a few minutes afterwards.
 
 ## Plex (Tautulli) setup
 

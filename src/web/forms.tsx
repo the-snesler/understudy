@@ -3,7 +3,7 @@ import { z } from 'zod';
 /**
  * Renders a plugin's zod config schema as an HTML form and turns the submitted form back into raw
  * values for the schema to validate. It supports the field types plugins use: string, number,
- * boolean, enum and string arrays (one item per line). Mark API keys and the like with
+ * boolean, enum, arrays of enums (checkboxes) and string arrays (one item per line). Mark API keys and the like with
  * `.meta({ secret: true })`: they render as password inputs and keep their value when left blank.
  */
 
@@ -69,6 +69,23 @@ export function SettingsFields(props: {
               </select>
               {error}
             </label>
+          );
+        }
+        if (schema.type === 'array' && schema.items?.enum) {
+          const selected = new Set((Array.isArray(value) ? value : []).map(String));
+          return (
+            <fieldset style="border: 0; padding: 0; margin: .9rem 0 0">
+              <legend style="font-weight: 600; padding: 0">{title}</legend>
+              {help}
+              <input type="hidden" name={`${name}.__set`} value="1" />
+              {schema.items.enum.map((opt) => (
+                <label style="display: inline-block; font-weight: 400; margin: 0 1rem 0 0">
+                  <input type="checkbox" name={name} value={String(opt)} checked={selected.has(String(opt))} />
+                  {String(opt)}
+                </label>
+              ))}
+              {error}
+            </fieldset>
           );
         }
         if (schema.type === 'array') {
@@ -139,6 +156,8 @@ export function parseSettingsForm(
     const str = typeof raw === 'string' ? raw : undefined;
     if (s.type === 'boolean') {
       if (form[`${name}.__bool`] !== undefined) out[key] = raw === 'on';
+    } else if (s.type === 'array' && s.items?.enum) {
+      if (form[`${name}.__set`] !== undefined) out[key] = (Array.isArray(raw) ? raw : raw === undefined ? [] : [raw]).map(String);
     } else if (s.type === 'array') {
       if (str !== undefined) out[key] = str.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     } else if (s.type === 'number' || s.type === 'integer') {

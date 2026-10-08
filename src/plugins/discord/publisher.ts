@@ -113,7 +113,9 @@ export class Publisher {
 
   private evaluate(): void {
     const gate = (this.opts.gate ?? ALWAYS_ALLOW).check();
-    this.gateReason = gate.allowed ? undefined : gate.reason;
+    const reason = gate.allowed ? undefined : (gate.reason ?? 'blocked');
+    if (reason !== this.gateReason) this.opts.log.info(reason ? `Presence hidden: ${reason}` : 'Presence allowed again');
+    this.gateReason = reason;
     this.desired = gate.allowed ? this.candidate() : null;
     if (!this.force && this.matchesPublished(this.desired)) return;
     this.schedule(DEBOUNCE_MS);

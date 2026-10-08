@@ -206,7 +206,8 @@ export function createWebApp(opts: WebOptions): Hono {
     '/instances/:id/settings',
     withView(async (c, view) => {
       if (!view.plugin) return c.text('Unknown plugin', 400);
-      const form = await c.req.parseBody();
+      // `all`: repeated fields (checkbox groups) arrive as arrays.
+      const form = await c.req.parseBody({ all: true });
       const raw = parseSettingsForm(view.plugin.configSchema, form, view.config.config);
       const result = await registry.saveConfig(view.config.id, raw, String(form.label ?? ''));
       if (!result.ok) return instancePage(c, view, { errors: issuesByField(result.issues), values: { ...view.config.config, ...raw } });
