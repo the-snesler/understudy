@@ -1,12 +1,25 @@
-# server-rpc
+# Understudy
 
-Show what you're doing on self-hosted services as your Discord presence, with no Discord client
-running. It collects "now playing" activity from **sources** and sends it to **outputs**. Today
-there's one output: Discord, which sets your presence through Discord's (undocumented) headless
-sessions API.
+Understudy performs your Discord presence when your own client can't. It's a small self-hosted
+server that watches what you're doing elsewhere and shows it on your Discord profile:
+- "Watching Plex", with the poster and a progress bar;
+- "Listening to Plex", with album art;
+- "Playing Nintendo Switch", with the game.
 
-Status: early. Sources so far: **Plex** (via Tautulli), **Nintendo Switch** (via
-[nxapi](https://github.com/samuelthomas2774/nxapi)) and **Manual** (set an activity from the web UI).
+It doesn't need the Discord desktop app on the machine doing the playing.
+
+- **Sources:**
+  - **Plex** (via Tautulli): movies, episodes and music.
+  - **Nintendo Switch** (via [nxapi](https://github.com/samuelthomas2774/nxapi)): Switch and
+    Switch 2 games.
+  - **Manual**: set an activity from the web UI.
+- **Output: Discord.**
+  - Only while you're actually on Discord, with your real status.
+  - Paused media is hidden.
+  - Priority between sources, quiet hours, and a pause switch with an HTTP API.
+- **Web UI** for setup, sign-ins and live status. Settings live in `/data`.
+
+Sources and outputs are plugins, so more can be added (see [Architecture](#architecture)).
 
 ## Running
 
@@ -29,6 +42,8 @@ pnpm test
 | `DATA_DIR` | `./data` (`/data` in Docker) | `config.json` (settings) and `state.json` (tokens). Both are mode 600. |
 | `UI_PASSWORD` | unset | Basic-auth password for the web UI (any username). Set it: the UI holds your Discord tokens. |
 | `PUBLIC_URL` | request origin | The URL you open the UI at, if that differs from what the server sees (e.g. behind a reverse proxy). Used for the OAuth redirect URI, and, if it's public HTTPS, for the optional artwork proxy. |
+| `TZ` | system zone | Default time zone for quiet hours (e.g. `America/Chicago`). Each Discord output can override it. |
+| `NXAPI_AUTH_CLIENT_ID` | unset | Default nxapi-auth client ID for the Nintendo Switch source. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
 ## Discord setup
@@ -45,8 +60,8 @@ If the redirect page can't load (e.g. you registered `localhost` but opened the 
 machine), copy the URL from the address bar and paste it into "Redirect page didn't load?".
 
 Things to know:
-- Discord shows **one** headless activity per app at a time. When several sources are active, the
-  Discord output picks one: by its source priority list, then the most recent.
+- **One activity at a time.** When several sources are active, the Discord output picks one: by
+  its source priority list (source ids, highest first), then the most recent.
 - Paused activities are hidden by default, like Spotify's integration. The Discord settings can
   rank them last or show them instead.
 - By default the activity is shown only while one of your real Discord clients (desktop, web or
@@ -60,6 +75,39 @@ Things to know:
   - a headless session makes you appear online, even while Invisible;
   - Discord doesn't really delete one when asked: it lingers, holding you online with no activity,
     for a few minutes afterwards.
+
+- **Quiet hours** (Discord settings): daily times when nothing is shown, e.g. `23:00-07:00`, in
+  the configured time zone.
+
+## Pausing
+
+The dashboard has a **Pause publishing** switch: 30 minutes, 1 hour, 4 hours, or until you resume.
+While paused, the Discord output withdraws the activity. A pause survives restarts and ends by
+itself when timed. To stop a single source or output, use its Disable button instead.
+
+The same controls are available as a JSON API, using the UI password (any username). POST requests
+must send `Content-Type: application/json`, which keeps them safe from cross-site forgery.
+
+```sh
+curl -u :PASSWORD http://localhost:8080/api/status            # pause state and every source/output
+curl -u :PASSWORD -X POST -H 'Content-Type: application/json' -d '{"minutes": 60}' http://localhost:8080/api/pause
+curl -u :PASSWORD -X POST -H 'Content-Type: application/json' -d '{}' http://localhost:8080/api/resume
+curl -u :PASSWORD -X POST -H 'Content-Type: application/json' -d '{}' http://localhost:8080/api/toggle
+```
+
+`/api/pause` without `minutes` pauses until resumed. For example, a Home Assistant
+`rest_command` that pauses while you're at a lecture:
+
+```yaml
+rest_command:
+  understudy_pause:
+    url: http://understudy.local:8080/api/pause
+    method: post
+    username: ha
+    password: !secret understudy_password
+    content_type: application/json
+    payload: '{"minutes": 75}'
+```
 
 ## Plex (Tautulli) setup
 
@@ -116,6 +164,19 @@ Nintendo's API doesn't let you read your own presence, so this reads it from the
 Presence is polled every 60 seconds by default. Games show as "Playing Nintendo Switch" (or
 "Nintendo Switch 2"), with the game's icon and, if the game provides one, its status text.
 
+## Troubleshooting
+
+- **The Discord page shows a session list.** Open "Your Discord clients" to see every session
+  Discord reports: your clients, this app's connection, and any headless session. It's the quickest
+  way to see why something is or isn't shown. Changes are also logged (see Log).
+- **Shown as online after closing a browser tab.** Discord keeps a web client's session for a
+  while after the tab closes, so Understudy keeps showing your activity until Discord drops it.
+  The desktop app disconnects cleanly.
+- **Nothing shows while you're Invisible.** That's deliberate: showing an activity would reveal
+  that you're online.
+- **`invalid_scope` when connecting Discord.** Enable the Social SDK for your app (see Discord
+  setup).
+
 ## Architecture
 
 ```
@@ -126,6 +187,7 @@ src/
     tautulli/  Plex via Tautulli: polling, filters, templates, artwork (TMDB, iTunes, signed proxy)
     nintendo/  Nintendo Switch via nxapi: consent, sign-in, friend picker, presence polling
     manual/    the hand-driven test source
+  core/controls.ts   app-wide pause; core/schedule.ts   quiet-hour windows
   web/         Hono + JSX server-rendered UI with htmx, and settings forms built from zod schemas
 ```
 

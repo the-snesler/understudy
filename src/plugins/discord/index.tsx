@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 import { errorMessage } from '../../core/log.js';
+import { defaultTimeZone, inWindows, isValidTimeZone, minutesInZone, parseWindows } from '../../core/schedule.js';
 import { defineOutput, type OutputContext, type PanelProps } from '../../core/plugin.js';
 import { Layout, Notice, timeAgo } from '../../web/layout.js';
 import { DiscordApi, type TokenProvider } from './api.js';
@@ -79,6 +80,28 @@ const configSchema = z.object({
     .array(z.enum(['online', 'idle', 'dnd']))
     .default(['online', 'idle', 'dnd'])
     .meta({ title: 'Statuses that count as on Discord', description: 'Which statuses of your real clients allow the activity to show.' }),
+  quietHours: z
+    .string()
+    .trim()
+    .default('')
+    .refine((v) => {
+      try {
+        parseWindows(v);
+        return true;
+      } catch {
+        return false;
+      }
+    }, 'Use time ranges like 23:00-07:00, separated by commas')
+    .meta({
+      title: 'Quiet hours',
+      description: 'Daily times when nothing is shown, e.g. "23:00-07:00" or "09:00-17:00, 22:00-08:00". Leave empty for none.',
+    }),
+  timeZone: z
+    .string()
+    .trim()
+    .default(defaultTimeZone())
+    .refine(isValidTimeZone, 'Not a known time zone (use a name like America/Chicago)')
+    .meta({ title: 'Time zone for quiet hours', description: 'An IANA time zone name, e.g. America/Chicago. Defaults to the TZ variable or the server\'s zone.' }),
 });
 
 type Config = z.infer<typeof configSchema>;
@@ -179,8 +202,12 @@ function createDiscord(ctx: OutputContext<Config>) {
     },
   });
   const session = config.onlyWhenOnline ? new GatewayPresence(gateway, api, config.applicationId, log) : headless;
+  const quietWindows = parseWindows(config.quietHours);
+  const isQuiet = () => quietWindows.length > 0 && inWindows(quietWindows, minutesInZone(new Date(), config.timeZone));
+  let quietTimer: ReturnType<typeof setInterval> | undefined;
   const gate: PresenceGate = {
     check() {
+      if (isQuiet()) return { allowed: false, reason: `quiet hours (${config.quietHours})` };
       if (!config.onlyWhenOnline) return { allowed: true };
       if (!gateway.informed) {
         const why = gateway.state === 'failed' ? `can't watch your status (${gateway.lastError})` : 'checking your Discord status';
@@ -248,12 +275,23 @@ function createDiscord(ctx: OutputContext<Config>) {
     start() {
       publisher.start();
       syncGateway();
+      if (quietWindows.length) {
+        // Re-check when quiet hours begin or end.
+        let quiet = isQuiet();
+        quietTimer = setInterval(() => {
+          if (isQuiet() !== quiet) {
+            quiet = !quiet;
+            publisher.kick();
+          }
+        }, 30_000);
+      }
       // Switched from headless mode: withdraw what that left behind (as far as Discord allows).
       if (config.onlyWhenOnline && headless.active && connected()) {
         headless.clear().catch((err: unknown) => log.warn(`Could not delete the old headless session: ${errorMessage(err)}`));
       }
     },
     async stop() {
+      clearInterval(quietTimer);
       try {
         await publisher.stop();
       } catch (err) {

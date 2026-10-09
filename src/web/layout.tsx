@@ -38,6 +38,8 @@ pre { background: var(--bg); padding: .75rem; border-radius: 6px; overflow-x: au
 .preview img { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; }
 .log td { font-family: ui-monospace, monospace; font-size: .8rem; white-space: pre-wrap; }
 .lvl-warn { color: var(--warn); } .lvl-error { color: var(--err); }
+.card.paused { border-color: var(--warn); }
+button.small { padding: .2rem .6rem; font-size: .85rem; }
 `;
 
 export function Layout(props: { title: string; children: Child }) {
@@ -46,14 +48,14 @@ export function Layout(props: { title: string; children: Child }) {
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>{`${props.title} · server-rpc`}</title>
+        <title>{`${props.title} · Understudy`}</title>
         <style dangerouslySetInnerHTML={{ __html: CSS }} />
         <script src="/static/htmx.min.js" defer></script>
       </head>
       <body>
         <header>
           <a class="brand" href="/">
-            server-rpc
+            Understudy
           </a>
           <a href="/">Dashboard</a>
           <a href="/log">Log</a>

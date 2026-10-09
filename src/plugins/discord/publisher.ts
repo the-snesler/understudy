@@ -112,7 +112,9 @@ export class Publisher {
   }
 
   private evaluate(): void {
-    const gate = (this.opts.gate ?? ALWAYS_ALLOW).check();
+    const gate = this.state.paused
+      ? { allowed: false, reason: 'publishing is paused' }
+      : (this.opts.gate ?? ALWAYS_ALLOW).check();
     const reason = gate.allowed ? undefined : (gate.reason ?? 'blocked');
     if (reason !== this.gateReason) this.opts.log.info(reason ? `Presence hidden: ${reason}` : 'Presence allowed again');
     this.gateReason = reason;

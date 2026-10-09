@@ -86,6 +86,8 @@ const STALE_GRACE_MS = 2 * 60_000;
 const PRESENCE_GAP_MS = 2_000;
 /** Minimum spacing between corrections when Discord reports a different status than we sent. */
 const CORRECTION_GAP_MS = 15_000;
+/** Discord's session list can lag our own update by a moment; only correct after this. */
+const SETTLE_MS = 5_000;
 /** Which real-client status to copy when they differ: dnd is account-wide; idle only if all are. */
 const STATUS_ORDER = ['dnd', 'online', 'idle'];
 
@@ -129,6 +131,7 @@ export class DiscordGateway {
   private lastPresenceAt = 0;
   private lastCorrectionAt = 0;
   private presenceTimer: ReturnType<typeof setTimeout> | undefined;
+  private correctionTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly createSocket: (url: string) => SocketLike;
   private readonly random: () => number;
 
@@ -239,7 +242,7 @@ export class DiscordGateway {
           else
             send(2, {
               token: `Bearer ${token}`,
-              properties: { os: process.platform, browser: 'server-rpc', device: 'server-rpc' },
+              properties: { os: process.platform, browser: 'understudy', device: 'understudy' },
             });
           break;
         }
@@ -338,6 +341,15 @@ export class DiscordGateway {
   private correctPresence(): void {
     const own = this.sessions.find((s) => s.session_id === this.sessionId);
     if (!own || !this.sentPresence || own.status === this.sentPresence.status) return;
+    const settling = this.lastPresenceAt + SETTLE_MS - Date.now();
+    if (settling > 0) {
+      // Probably just not applied yet: look again once it has had time to settle.
+      this.correctionTimer ??= setTimeout(() => {
+        this.correctionTimer = undefined;
+        if (this.state === 'ready') this.correctPresence();
+      }, settling);
+      return;
+    }
     if (Date.now() - this.lastCorrectionAt < CORRECTION_GAP_MS) return;
     this.lastCorrectionAt = Date.now();
     this.opts.log.warn(`Discord reports our Gateway session as "${own.status}", expected "${this.sentPresence.status}"; re-sending`);
@@ -438,6 +450,8 @@ export class DiscordGateway {
     clearInterval(this.heartbeat);
     clearTimeout(this.presenceTimer);
     this.presenceTimer = undefined;
+    clearTimeout(this.correctionTimer);
+    this.correctionTimer = undefined;
   }
 }
 

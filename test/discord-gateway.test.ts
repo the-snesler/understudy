@@ -145,7 +145,13 @@ describe('DiscordGateway', () => {
     await t.connect([session('ours', 'invisible', 'web')]);
     const s = t.last();
     const op3s = () => s.sent.filter((m) => m.op === 3).length;
-    await vi.advanceTimersByTimeAsync(2_000);
+    // Right after our update: Discord may just be behind, so wait for it to settle first.
+    s.receive(0, [session('ours', 'online', 'web')], 'SESSIONS_REPLACE', 2);
+    expect(op3s()).toBe(1);
+    s.receive(0, [session('ours', 'invisible', 'web')], 'SESSIONS_REPLACE', 2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(op3s()).toBe(1); // it caught up by itself
+
     s.receive(0, [session('ours', 'online', 'web')], 'SESSIONS_REPLACE', 2);
     expect(op3s()).toBe(2);
     s.receive(0, [session('ours', 'online', 'web')], 'SESSIONS_REPLACE', 3);

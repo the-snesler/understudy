@@ -1,5 +1,5 @@
 {
-  "name": "server-rpc",
+  "name": "understudy",
   "version": "0.1.0",
   "private": true,
   "description": "Publish now-playing activity from self-hosted services as Discord presence via headless sessions",

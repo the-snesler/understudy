@@ -4,6 +4,7 @@ import { Hono, type Context } from 'hono';
 import { basicAuth } from 'hono/basic-auth';
 import { csrf } from 'hono/csrf';
 import { describeActivity } from '../core/activity.js';
+import type { Controls } from '../core/controls.js';
 import type { Hub } from '../core/hub.js';
 import type { LogBuffer, LogEntry } from '../core/log.js';
 import type { AppEnv, PanelProps } from '../core/plugin.js';
@@ -30,7 +31,22 @@ export interface WebOptions {
   logs: LogBuffer;
   env: AppEnv;
   uiPassword: string | undefined;
+  /** App-wide controls (pause). Optional so tests can omit it. */
+  controls?: Controls;
 }
+
+/** Only allow redirects back to our own pages. */
+function safeReturn(value: unknown): string | undefined {
+  const v = typeof value === 'string' ? value : '';
+  return v.startsWith('/') && !v.startsWith('//') && !v.includes('\\') ? v : undefined;
+}
+
+const PAUSE_OPTIONS: [string, number | undefined][] = [
+  ['30 minutes', 30],
+  ['1 hour', 60],
+  ['4 hours', 240],
+  ['Until I resume', undefined],
+];
 
 export function createWebApp(opts: WebOptions): Hono {
   const { registry, hub, logs, env } = opts;
@@ -52,8 +68,16 @@ export function createWebApp(opts: WebOptions): Hono {
 
   if (opts.uiPassword) {
     const password = opts.uiPassword;
-    app.use('*', basicAuth({ verifyUser: (_user, pass) => pass === password, realm: 'server-rpc' }));
+    app.use('*', basicAuth({ verifyUser: (_user, pass) => pass === password, realm: 'understudy' }));
   }
+  // API POSTs must be JSON: browsers send saved basic-auth credentials even on cross-site requests, and a
+  // cross-site form can't send application/json, so this keeps the API safe from forged requests.
+  app.use('/api/*', async (c, next) => {
+    if (c.req.method !== 'GET' && !(c.req.header('content-type') ?? '').startsWith('application/json')) {
+      return c.json({ error: 'Send Content-Type: application/json' }, 415);
+    }
+    await next();
+  });
   app.use('*', csrf());
 
   const origin = (c: Context) => env.publicUrl ?? new URL(c.req.url).origin;
@@ -63,8 +87,29 @@ export function createWebApp(opts: WebOptions): Hono {
     const views = registry.list();
     const sources = views.filter((v) => v.plugin?.kind === 'source');
     const outputs = views.filter((v) => v.plugin?.kind === 'output');
+    const pause = opts.controls?.pauseInfo();
     return (
       <div hx-get="/partials/dashboard" hx-trigger="every 3s" hx-swap="outerHTML">
+        {opts.controls && (
+          <div class={`card ${pause?.paused ? 'paused' : ''}`}>
+            {pause?.paused ? (
+              <form class="actions" style="margin: 0" method="post" action="/resume">
+                <strong>Publishing is paused</strong>
+                <span class="muted">{pause.until ? `until ${new Date(pause.until).toLocaleString()}` : 'until you resume'}</span>
+                <button>Resume</button>
+              </form>
+            ) : (
+              <form class="actions" style="margin: 0" method="post" action="/pause">
+                <span>Pause publishing:</span>
+                {PAUSE_OPTIONS.map(([label, minutes]) => (
+                  <button class="secondary" name="minutes" value={minutes === undefined ? '' : String(minutes)}>
+                    {label}
+                  </button>
+                ))}
+              </form>
+            )}
+          </div>
+        )}
         <div class="card">
           <h2>Sources</h2>
           <InstanceTable views={sources} activity={(v) => hub.get(v.config.id)?.activity} />
@@ -216,12 +261,56 @@ export function createWebApp(opts: WebOptions): Hono {
   );
   app.post('/instances/:id/enable', withView(async (c, view) => {
     await registry.setEnabled(view.config.id, true);
-    return c.redirect(`/instances/${view.config.id}`);
+    return c.redirect(safeReturn((await c.req.parseBody()).return) ?? `/instances/${view.config.id}`);
   }));
   app.post('/instances/:id/disable', withView(async (c, view) => {
     await registry.setEnabled(view.config.id, false);
-    return c.redirect(`/instances/${view.config.id}`);
+    return c.redirect(safeReturn((await c.req.parseBody()).return) ?? `/instances/${view.config.id}`);
   }));
+
+  // ---- pause -----------------------------------------------------------------------------------
+  const minutesFrom = (v: unknown): number | undefined => {
+    const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+  app.post('/pause', async (c) => {
+    await opts.controls?.pause(minutesFrom((await c.req.parseBody()).minutes));
+    return c.redirect('/');
+  });
+  app.post('/resume', async (c) => {
+    await opts.controls?.resume();
+    return c.redirect('/');
+  });
+
+  // ---- JSON API, for automations (e.g. Home Assistant). Uses the same password as the UI. ------
+  const statusJson = () => ({
+    pause: opts.controls?.pauseInfo() ?? { paused: false },
+    instances: registry.list().map((v) => ({
+      id: v.config.id,
+      kind: v.plugin?.kind,
+      plugin: v.config.plugin,
+      label: v.label,
+      enabled: v.config.enabled,
+      health: v.status.health,
+      message: v.status.message,
+      activity: v.plugin?.kind === 'source' ? (hub.get(v.config.id)?.activity ?? null) : undefined,
+    })),
+  });
+  app.get('/api/status', (c) => c.json(statusJson()));
+  app.post('/api/pause', async (c) => {
+    if (!opts.controls) return c.json({ error: 'not available' }, 501);
+    const body = (await c.req.json().catch(() => ({}))) as { minutes?: unknown };
+    return c.json({ pause: await opts.controls.pause(minutesFrom(body.minutes ?? c.req.query('minutes'))) });
+  });
+  app.post('/api/resume', async (c) => {
+    if (!opts.controls) return c.json({ error: 'not available' }, 501);
+    return c.json({ pause: await opts.controls.resume() });
+  });
+  app.post('/api/toggle', async (c) => {
+    if (!opts.controls) return c.json({ error: 'not available' }, 501);
+    const paused = opts.controls.pauseInfo().paused;
+    return c.json({ pause: paused ? await opts.controls.resume() : await opts.controls.pause() });
+  });
   app.post('/instances/:id/restart', withView(async (c, view) => {
     await registry.restart(view.config.id);
     return c.redirect(`/instances/${view.config.id}`);
@@ -262,6 +351,7 @@ function InstanceTable(props: { views: InstanceView[]; activity?: (v: InstanceVi
           <th>Name</th>
           <th>Status</th>
           {props.activity && <th>Current activity</th>}
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -277,6 +367,12 @@ function InstanceTable(props: { views: InstanceView[]; activity?: (v: InstanceVi
                 <Health health={v.status.health} message={v.status.message} />
               </td>
               {props.activity && <td>{a ? describeActivity(a) : <span class="muted">-</span>}</td>}
+              <td style="text-align: right">
+                <form class="inline" method="post" action={`/instances/${v.config.id}/${v.config.enabled ? 'disable' : 'enable'}`}>
+                  <input type="hidden" name="return" value="/" />
+                  <button class="secondary small">{v.config.enabled ? 'Disable' : 'Enable'}</button>
+                </form>
+              </td>
             </tr>
           );
         })}

@@ -285,7 +285,7 @@ export function createNintendoPlugin(makeBackend: (cfg: Config, dataDir?: string
               <ol>
                 <li>
                   Go to <a href={NXAPI_AUTH_URL}>nxapi-auth</a>, sign in, and register a new OAuth client. Name it anything (e.g.
-                  "server-rpc") and choose <strong>Public</strong> as the type.
+                  "Understudy") and choose <strong>Public</strong> as the type.
                 </li>
                 <li>
                   Under <strong>Allowed grant types</strong>, tick <strong>Client credentials</strong> and <strong>Refresh token</strong>.

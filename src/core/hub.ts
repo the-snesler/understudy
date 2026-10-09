@@ -3,6 +3,11 @@ import { activitiesEquivalent, type NowPlaying, type SourceActivity } from './ac
 export interface HubState {
   /** Current activity per source instance that has one, in no particular order. */
   activities: SourceActivity[];
+  /**
+   * The user has paused publishing. Outputs that share activity with others should withdraw it;
+   * private ones (e.g. a history log) may carry on.
+   */
+  paused?: boolean;
 }
 
 export type HubListener = (state: HubState) => void;
@@ -11,6 +16,7 @@ export type HubListener = (state: HubState) => void;
 export class Hub {
   private readonly current = new Map<string, SourceActivity>();
   private readonly listeners = new Set<HubListener>();
+  private paused = false;
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -31,7 +37,13 @@ export class Hub {
   }
 
   snapshot(): HubState {
-    return { activities: [...this.current.values()] };
+    return { activities: [...this.current.values()], paused: this.paused };
+  }
+
+  setPaused(paused: boolean): void {
+    if (paused === this.paused) return;
+    this.paused = paused;
+    this.emit();
   }
 
   subscribe(listener: HubListener): () => void {

@@ -1,7 +1,7 @@
 # Copy to compose.yml and adjust. The container runs as uid 1000 ("node"); a bind-mounted ./data
 # directory must be writable by that user.
 services:
-  server-rpc:
+  understudy:
     build: .
     restart: unless-stopped
     ports:
@@ -13,5 +13,9 @@ services:
       UI_PASSWORD: change-me
       # The URL you open the UI at, if it differs from what the container sees (e.g. behind a
       # reverse proxy). Used for the Discord OAuth redirect URI.
-      # PUBLIC_URL: https://rpc.example.com
+      # PUBLIC_URL: https://understudy.example.com
+      # Default time zone for quiet hours.
+      # TZ: America/Chicago
+      # nxapi-auth client ID for the Nintendo Switch source (can also be set in the UI).
+      # NXAPI_AUTH_CLIENT_ID: ...
       # LOG_LEVEL: info

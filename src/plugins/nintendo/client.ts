@@ -65,7 +65,7 @@ export interface NintendoBackend {
 export interface BackendOptions {
   /** nxapi-auth client identifier for the f-token API. */
   clientId: string;
-  /** e.g. `server-rpc/0.1.0 (+https://...)` */
+  /** e.g. `understudy/0.1.0 (+https://...)` */
   userAgent: string;
   /** Where nxapi may keep its cache. */
   dataDir?: string;
@@ -211,8 +211,8 @@ export function userAgent(): string {
       version?: string;
       homepage?: string;
     };
-    return `${pkg.name ?? 'server-rpc'}/${pkg.version ?? '0.0.0'}${pkg.homepage ? ` (+${pkg.homepage})` : ''}`;
+    return `${pkg.name ?? 'understudy'}/${pkg.version ?? '0.0.0'}${pkg.homepage ? ` (+${pkg.homepage})` : ''}`;
   } catch {
-    return 'server-rpc/0.0.0';
+    return 'understudy/0.0.0';
   }
 }
