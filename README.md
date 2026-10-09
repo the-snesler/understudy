@@ -6,6 +6,9 @@ server that watches what you're doing elsewhere and shows it on your Discord pro
 - "Listening to Plex", with album art;
 - "Playing Nintendo Switch", with the game.
 
+<img width="2826" height="2116" alt="image" src="https://github.com/user-attachments/assets/9480dda1-10dc-4b36-897f-82481be4acbb" />
+<img width="299" height="408" alt="image" src="https://github.com/user-attachments/assets/fdf98ce1-830b-41c6-9e23-85fe76a8c144" />
+
 It doesn't need the Discord desktop app on the machine doing the playing.
 
 - **Sources:**
