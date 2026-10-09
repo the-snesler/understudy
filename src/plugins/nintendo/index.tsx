@@ -7,6 +7,7 @@ import { defineSource, type SourceContext } from '../../core/plugin.js';
 import { Notice, timeAgo } from '../../web/layout.js';
 import {
   NintendoAuthError,
+  NintendoError,
   NxapiBackend,
   userAgent,
   type CoralConnection,
@@ -77,6 +78,9 @@ const MAX_BACKOFF_MS = 10 * 60 * 1000;
 const PENDING_TTL_MS = 30 * 60 * 1000;
 
 export function createNintendoPlugin(makeBackend: (cfg: Config, dataDir?: string) => NintendoBackend) {
+  /** The last friend list per instance, kept across restarts (e.g. saving settings) to avoid refetching it. */
+  const lastFriends = new Map<string, { list: FriendInfo[]; at: number }>();
+
   function createNintendo(ctx: SourceContext<Config>) {
     const { config, log } = ctx;
     const read = (): PersistedState => (ctx.state.get() ?? {}) as PersistedState;
@@ -85,10 +89,13 @@ export function createNintendoPlugin(makeBackend: (cfg: Config, dataDir?: string
 
     let connection: CoralConnection | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let friends: FriendInfo[] | undefined;
-    let friendsAt = 0;
+    let fetching: Promise<FriendInfo[]> | undefined;
+    let friends = lastFriends.get(ctx.instanceId)?.list;
+    let friendsAt = lastFriends.get(ctx.instanceId)?.at ?? 0;
     let lastError: string | undefined;
     let failures = 0;
+    /** Polling stopped after an error that may not be retried automatically; the user must act. */
+    let stopped = false;
     let busy: string | undefined;
     /** When the current game was first seen, so the elapsed timer stays put between polls. */
     let started: { key: string; at: number } | undefined;
@@ -106,22 +113,36 @@ export function createNintendoPlugin(makeBackend: (cfg: Config, dataDir?: string
       return connection;
     }
 
+    function setFriends(list: FriendInfo[] | undefined): void {
+      friends = list;
+      friendsAt = list ? Date.now() : 0;
+      if (list) lastFriends.set(ctx.instanceId, { list, at: friendsAt });
+      else lastFriends.delete(ctx.instanceId);
+    }
+
     async function signOut(reason?: string): Promise<void> {
       clearTimeout(timer);
       connection = undefined;
-      friends = undefined;
+      stopped = false;
+      setFriends(undefined);
       published = null;
       ctx.publish(null);
-      await write({ sessionToken: undefined, auth: undefined, account: undefined, pending: undefined });
       if (reason) lastError = reason;
+      await write({ sessionToken: undefined, auth: undefined, account: undefined, pending: undefined });
     }
 
-    async function refreshFriends(): Promise<FriendInfo[]> {
+    /** Fetch the friend list, sharing a fetch that's already in flight. */
+    function refreshFriends(): Promise<FriendInfo[]> {
       const conn = connect();
-      if (!conn) throw new Error('Not signed in');
-      friends = await conn.friends();
-      friendsAt = Date.now();
-      return friends;
+      if (!conn) return Promise.reject(new Error('Not signed in'));
+      fetching ??= conn
+        .friends()
+        .then((list) => {
+          setFriends(list);
+          return list;
+        })
+        .finally(() => (fetching = undefined));
+      return fetching;
     }
 
     function publishFrom(list: FriendInfo[]): void {
@@ -161,12 +182,19 @@ export function createNintendoPlugin(makeBackend: (cfg: Config, dataDir?: string
         const msg = errorMessage(err);
         if (msg !== lastError) log.error(`Could not fetch friends: ${msg}`);
         lastError = msg;
-        if (++failures >= MAX_FAILURES) {
+        // nxapi-znca-api's terms only allow automatic retries after network errors, or when its
+        // Retry-After says so. Anything else waits for the user.
+        const retry = err instanceof NintendoError ? err.retry : { kind: 'none' as const };
+        if (++failures >= MAX_FAILURES || retry.kind === 'none') {
           published = null;
           ctx.publish(null);
         }
-        // Back off instead of retrying (nxapi-znca-api's terms forbid automatic retries).
-        delay = Math.min(delay * 2 ** failures, MAX_BACKOFF_MS);
+        if (retry.kind === 'none') {
+          stopped = true;
+          log.warn('Stopped checking presence until you choose Try again');
+          return;
+        }
+        delay = retry.kind === 'after' ? retry.ms : Math.min(delay * 2 ** failures, MAX_BACKOFF_MS);
       }
       if (!ctx.signal.aborted) timer = setTimeout(() => void poll(), delay);
     }
@@ -174,7 +202,24 @@ export function createNintendoPlugin(makeBackend: (cfg: Config, dataDir?: string
     function restartPolling(): void {
       clearTimeout(timer);
       failures = 0;
-      if (connect() && read().friend) void poll();
+      stopped = false;
+      if (!connect() || !read().friend) return;
+      // A list fetched within the poll interval (at sign-in, by Refresh, or before a restart) is
+      // still current: show it and wait out the rest of the interval.
+      const age = Date.now() - friendsAt;
+      const interval = config.pollSeconds * 1000;
+      if (friends && age < interval) {
+        publishFrom(friends);
+        timer = setTimeout(() => void poll(), interval - age);
+      } else {
+        void poll();
+      }
+    }
+
+    /** For user-initiated fetches: sign out if Nintendo rejected the session token. */
+    async function userFetchFailed(err: unknown): Promise<string> {
+      if (err instanceof NintendoAuthError && err.signInAgain) await signOut(err.message);
+      return `Could not fetch friends: ${errorMessage(err)}`;
     }
 
     const back = `/instances/${ctx.instanceId}`;
@@ -193,6 +238,7 @@ export function createNintendoPlugin(makeBackend: (cfg: Config, dataDir?: string
         if (!s.consentAt) return { health: 'setup' as const, message: 'Read and accept the notice to sign in' };
         if (!signedIn()) return { health: lastError ? ('error' as const) : ('setup' as const), message: lastError ?? 'Sign in with your secondary Nintendo Account' };
         if (!s.friend) return { health: 'setup' as const, message: 'Choose the friend to show' };
+        if (stopped) return { health: 'error' as const, message: `${lastError ?? 'Error'}. Stopped checking until you choose Try again.` };
         if (lastError) return { health: 'error' as const, message: lastError };
         if (published) return { health: 'ok' as const, message: `${s.friend.name} is playing ${published.title}` };
         return { health: 'idle' as const, message: `${s.friend.name} isn't playing anything` };
@@ -233,8 +279,8 @@ export function createNintendoPlugin(makeBackend: (cfg: Config, dataDir?: string
             await write({ sessionToken: result.sessionToken, auth: result.auth, account: result.accountName, pending: undefined });
             connection = undefined;
             lastError = undefined;
+            setFriends(result.friends);
             log.info(`Signed in to Nintendo Switch Online as ${result.accountName}`);
-            await refreshFriends().catch((err: unknown) => log.warn(`Could not fetch friends: ${errorMessage(err)}`));
             restartPolling();
           } catch (err) {
             return c.redirect(fail(`Sign-in failed: ${errorMessage(err)}`));
@@ -244,12 +290,17 @@ export function createNintendoPlugin(makeBackend: (cfg: Config, dataDir?: string
           return c.redirect(`${back}?message=${encodeURIComponent('Signed in. Now choose the friend to show.')}`);
         });
 
+        // Also "Try again" after polling stopped.
         app.post('/friends/refresh', async (c) => {
           try {
             await refreshFriends();
           } catch (err) {
-            return c.redirect(fail(`Could not fetch friends: ${errorMessage(err)}`));
+            lastError = errorMessage(err);
+            return c.redirect(fail(await userFetchFailed(err)));
           }
+          if (stopped) log.info('Checking presence again');
+          lastError = undefined;
+          restartPolling();
           return c.redirect(back);
         });
 
@@ -371,6 +422,14 @@ export function createNintendoPlugin(makeBackend: (cfg: Config, dataDir?: string
         return (
           <div class="card">
             <h2>Signed in as {s.account}</h2>
+            {stopped && (
+              <Notice kind="error">
+                <form class="inline" method="post" action={`${ctx.routeBase}/friends/refresh`}>
+                  Stopped checking {s.friend?.name ?? 'presence'} after an error: {lastError}{' '}
+                  <button class="secondary">Try again</button>
+                </form>
+              </Notice>
+            )}
             {friends ? (
               <form method="post" action={`${ctx.routeBase}/friend`}>
                 <p>Whose presence should be shown? Normally your main account.</p>

@@ -45,6 +45,8 @@ export interface LoginResult {
   auth: CoralAuthData;
   /** The Nintendo Switch Online account name of the account that signed in. */
   accountName: string;
+  /** The friend list, fetched while signing in as the app does. */
+  friends: FriendInfo[];
 }
 
 export interface CoralConnection {
@@ -71,13 +73,29 @@ export interface BackendOptions {
   dataDir?: string;
 }
 
-export class NintendoAuthError extends Error {
+/**
+ * What nxapi-znca-api's terms allow after a failed request: retrying after a network error (the
+ * connection closed before a response), waiting as long as nxapi-znca-api's Retry-After says, or
+ * nothing until the user acts. Nintendo's own responses are never retried.
+ */
+export type RetryPolicy = { kind: 'backoff' } | { kind: 'after'; ms: number } | { kind: 'none' };
+
+export class NintendoError extends Error {
+  constructor(
+    message: string,
+    readonly retry: RetryPolicy,
+  ) {
+    super(message);
+  }
+}
+
+export class NintendoAuthError extends NintendoError {
   /** True when the session token is no longer valid and the user must sign in again. */
   constructor(
     message: string,
     readonly signInAgain: boolean,
   ) {
-    super(message);
+    super(message, { kind: 'none' });
   }
 }
 
@@ -115,13 +133,57 @@ export function parseAppLink(link: string): URLSearchParams {
   return new URLSearchParams(text.slice(hash + 1));
 }
 
-function describeError(err: unknown): NintendoAuthError | Error {
-  const e = err as { data?: { error?: string; error_description?: string; errorMessage?: string; status?: number }; message?: string };
-  if (e?.data?.error === 'invalid_grant') {
-    return new NintendoAuthError('Nintendo no longer accepts this sign-in; sign in again.', true);
+interface ResponseError {
+  message: string;
+  response: { status: number; url: string; headers: { get(name: string): string | null } };
+  data?: { error?: string; error_description?: string };
+}
+
+function isResponseError(err: unknown): err is ResponseError {
+  const response = (err as ResponseError | undefined)?.response;
+  return typeof response?.status === 'number' && typeof response.headers?.get === 'function';
+}
+
+/** No HTTP response: undici's "fetch failed" (connection refused, reset, DNS), or nxapi's 60 s timeout. */
+function isNetworkError(err: unknown): err is Error {
+  return (err instanceof TypeError && err.message === 'fetch failed') || (err instanceof Error && err.message === 'Timeout');
+}
+
+function fromNintendo(url: string): boolean {
+  try {
+    return /(^|\.)nintendo\.(com|net)$/.test(new URL(url).hostname);
+  } catch {
+    return true; // unknown origin: treat it as Nintendo, which is never retried
   }
-  if (e?.data?.error) return new Error(`Nintendo Account error: ${e.data.error_description ?? e.data.error}`);
-  return err instanceof Error ? err : new Error(String(err));
+}
+
+/** Retry-After as milliseconds: delay-seconds or an HTTP date. */
+export function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
+  if (!value) return undefined;
+  if (/^\d+$/.test(value.trim())) return Number(value.trim()) * 1000;
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? undefined : Math.max(0, at - now);
+}
+
+/** Turn an error from nxapi into a NintendoError that says whether it may be retried. */
+export function describeError(err: unknown): NintendoError {
+  if (err instanceof NintendoError) return err;
+  if (isNetworkError(err)) {
+    const cause = (err.cause as Error | undefined)?.message;
+    return new NintendoError(`Network error: ${cause ?? err.message}`, { kind: 'backoff' });
+  }
+  if (isResponseError(err)) {
+    const { data, response } = err;
+    if (fromNintendo(response.url)) {
+      if (data?.error === 'invalid_grant') return new NintendoAuthError('Nintendo no longer accepts this sign-in; sign in again.', true);
+      if (data?.error) return new NintendoError(`Nintendo Account error: ${data.error_description ?? data.error}`, { kind: 'none' });
+      return new NintendoError(err.message, { kind: 'none' });
+    }
+    const message = `nxapi-znca-api error: ${data?.error_description ?? data?.error ?? `HTTP ${response.status}`}`;
+    const ms = parseRetryAfter(response.headers.get('Retry-After'));
+    return new NintendoError(message, ms === undefined ? { kind: 'none' } : { kind: 'after', ms });
+  }
+  return new NintendoError(err instanceof Error ? err.message : String(err), { kind: 'none' });
 }
 
 export class NxapiBackend implements NintendoBackend {
@@ -141,8 +203,13 @@ export class NxapiBackend implements NintendoBackend {
       const token = await auth.getSessionToken(params);
       const { nso, data } = await coral.default.createWithSessionToken(token.session_token);
       // Do what the app does after signing in.
-      await Promise.all([nso.getAnnouncements(), nso.getFriendList(), nso.getWebServices(), nso.getActiveEvent()]);
-      return { sessionToken: token.session_token, auth: data, accountName: data.nsoAccount.user.name };
+      const [, list] = await Promise.all([nso.getAnnouncements(), nso.getFriendList(), nso.getWebServices(), nso.getActiveEvent()]);
+      return {
+        sessionToken: token.session_token,
+        auth: data,
+        accountName: data.nsoAccount.user.name,
+        friends: list.friends.map(toFriendInfo),
+      };
     } catch (err) {
       throw describeError(err);
     }

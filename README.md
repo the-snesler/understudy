@@ -166,6 +166,9 @@ Nintendo's API doesn't let you read your own presence, so this reads it from the
 
 Presence is polled every 60 seconds by default. Games show as "Playing Nintendo Switch" (or
 "Nintendo Switch 2"), with the game's icon and, if the game provides one, its status text.
+After a network error polling backs off and continues, and it waits as long as nxapi-znca-api asks
+(`Retry-After`). Any other error stops polling until you choose **Try again** on the Nintendo
+Switch page, because the service's terms forbid other automatic retries.
 
 ## Troubleshooting
 
