@@ -1,2 +1,9 @@
 allowBuilds:
   esbuild: true
+  # nxapi only uses sharp for presence-server image embeds; its prebuilt binaries suffice.
+  sharp: false
+
+overrides:
+  # discord-rpc (a dependency of nxapi, unused by us) lists this git-hosted package as optional; it's
+  # only for registering desktop URL schemes. Excluding it keeps git dependencies out of the tree.
+  register-scheme: '-'

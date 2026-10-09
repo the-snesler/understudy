@@ -18,11 +18,12 @@ const log = new Logger(logs, 'app', (env.LOG_LEVEL as LogLevel) || 'info');
 const config = new JsonStore<AppConfig>(path.join(dataDir, 'config.json'), emptyConfig);
 const state = new JsonStore<Record<string, unknown>>(path.join(dataDir, 'state.json'), () => ({}));
 const hub = new Hub();
-const registry = new Registry({ plugins, config, state, hub, log, env: { publicUrl } });
+const registry = new Registry({ plugins, config, state, hub, log, env: { publicUrl, dataDir } });
 
 await registry.ensureInstances([
   { plugin: 'discord', enabled: true },
   { plugin: 'tautulli', enabled: true },
+  { plugin: 'nintendo', enabled: true },
   { plugin: 'manual', enabled: true },
 ]);
 await registry.startAll();

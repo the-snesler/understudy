@@ -5,8 +5,8 @@ running. It collects "now playing" activity from **sources** and sends it to **o
 there's one output: Discord, which sets your presence through Discord's (undocumented) headless
 sessions API.
 
-Status: early. Sources so far: **Plex** (via Tautulli) and **Manual** (set an activity from the
-web UI). Nintendo Switch (via nxapi) is next.
+Status: early. Sources so far: **Plex** (via Tautulli), **Nintendo Switch** (via
+[nxapi](https://github.com/samuelthomas2774/nxapi)) and **Manual** (set an activity from the web UI).
 
 ## Running
 
@@ -78,6 +78,44 @@ Discord loads artwork itself, so images must be public HTTPS URLs. In order:
 The text lines are templates, e.g. `S{seasonPadded}E{episodePadded}[ · {episodeTitle}]`. Text in
 `[brackets]` is dropped when a variable inside is empty. The settings page lists every variable.
 
+## Nintendo Switch setup
+
+Nintendo's API doesn't let you read your own presence, so this reads it from the friend list of a
+**secondary Nintendo Account** that is friends with your main one. You need:
+
+1. **A secondary Nintendo Account**, added as a friend of your main account. Your main account must
+   share its online status with friends (on the Switch: System Settings → Users → your user →
+   friend settings).
+2. **An nxapi-auth client ID.** It identifies this app to nxapi's f-token API. Register once at
+   <https://nxapi-auth.fancy.org.uk/oauth/clients>:
+   - **Type:** Public. You can't change this later.
+   - **Allowed grant types:** Client credentials and Refresh token.
+   - **Scope:** in the *nxapi-znca-api* section, only f-generation, Request encryption and Response
+     decryption (`ca:gf ca:er ca:dr`). Leave every other scope, and the client authentication
+     section, alone.
+   - **Details:** fill in a description and a contact URL.
+
+   Enter the Client ID on the Nintendo Switch page, or set `NXAPI_AUTH_CLIENT_ID`. It isn't a
+   secret.
+3. **Sign in** on the Nintendo Switch page:
+   - Read and accept the notice.
+   - Open the sign-in link and sign in with the secondary account.
+   - Right-click **Select this person**, copy the link (`npf71b963c1b7b6d119://auth#…`) and paste
+     it back.
+   - Pick your main account from the friend list.
+
+> **Privacy:** Nintendo only accepts sign-ins from its own app. To sign in, this uses
+> [nxapi-znca-api](https://github.com/samuelthomas2774/nxapi-znca-api), a third-party service.
+> Your secondary account's Nintendo Account id_token, its Coral token, and data exchanged with
+> Nintendo's Coral API are sent to that service. nxapi also loads its configuration from
+> fancy.org.uk. Nothing is contacted until you accept the notice. See
+> [what this means for you](https://github.com/samuelthomas2774/nxapi-znca-api/blob/docs/docs/end-user-help.md).
+> The integration follows the service's
+> [terms for clients](https://github.com/samuelthomas2774/nxapi-znca-api/blob/docs/docs/public-api-terms.md).
+
+Presence is polled every 60 seconds by default. Games show as "Playing Nintendo Switch" (or
+"Nintendo Switch 2"), with the game's icon and, if the game provides one, its status text.
+
 ## Architecture
 
 ```
@@ -86,6 +124,7 @@ src/
   plugins/     sources and outputs; register new ones in plugins/index.ts
     discord/   OAuth (PKCE), REST client, headless session, activity mapping, publisher
     tautulli/  Plex via Tautulli: polling, filters, templates, artwork (TMDB, iTunes, signed proxy)
+    nintendo/  Nintendo Switch via nxapi: consent, sign-in, friend picker, presence polling
     manual/    the hand-driven test source
   web/         Hono + JSX server-rendered UI with htmx, and settings forms built from zod schemas
 ```

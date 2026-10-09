@@ -26,6 +26,8 @@ export interface InstanceStatus {
 export interface AppEnv {
   /** Externally reachable base URL of the web UI (no trailing slash), if configured. */
   publicUrl: string | undefined;
+  /** Directory for persistent data; plugins may keep caches in subdirectories. */
+  dataDir?: string;
 }
 
 export interface BaseContext<C> {
