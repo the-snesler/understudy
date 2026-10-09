@@ -2,7 +2,7 @@
 # directory must be writable by that user.
 services:
   understudy:
-    build: .
+    image: ghcr.io/the-snesler/understudy:latest
     restart: unless-stopped
     ports:
       - "8080:8080"
