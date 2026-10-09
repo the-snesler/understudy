@@ -1,8 +1,0 @@
-# OAuth access/refresh tokens + known headless-session tokens
-state.json
-state.json.tmp
-*.state.json
-# local config (may hold DISCORD_CLIENT_SECRET)
-.env
-gateway-log.jsonl
-results.md
