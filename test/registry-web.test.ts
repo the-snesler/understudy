@@ -171,6 +171,31 @@ describe('web app', () => {
     expect(hub.get('test-source')?.activity.title).toBe('From form');
   });
 
+  it('shows defaults for settings added after the config was saved', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'srpc-test-'));
+    dirs.push(dir);
+    // A config saved by an older version, before `on` and `tags` existed.
+    fs.writeFileSync(
+      path.join(dir, 'config.json'),
+      JSON.stringify({ version: 1, instances: [{ id: 'old', plugin: 'test-source', enabled: false, config: { title: 'Saved' } }] }),
+    );
+    const hub = new Hub();
+    const logs = new LogBuffer();
+    const registry = new Registry({
+      plugins: [testSource],
+      config: new JsonStore<AppConfig>(path.join(dir, 'config.json'), emptyConfig),
+      state: new JsonStore<Record<string, unknown>>(path.join(dir, 'state.json'), () => ({})),
+      hub,
+      log: new Logger(logs, 'test', 'error'),
+      env: { publicUrl: undefined },
+    });
+    const app = createWebApp({ registry, hub, logs, env: { publicUrl: undefined }, uiPassword: undefined });
+    const page = await (await app.request('/instances/old')).text();
+    expect(page).toMatch(/name="cfg\.on" checked/); // default true, not unticked
+    expect(page).toContain('value="3"'); // count's default
+    expect(page).toContain('value="Saved"');
+  });
+
   it('rejects cross-site form posts and requires the password when set', async () => {
     const { registry, hub, logs } = setup();
     const app = createWebApp({ registry, hub, logs, env: { publicUrl: undefined }, uiPassword: 'pw' });

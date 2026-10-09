@@ -35,6 +35,15 @@ export interface WebOptions {
   controls?: Controls;
 }
 
+/**
+ * The settings an instance actually runs with: saved values plus defaults for anything added since
+ * they were saved. The form must show these, or new options would look unset (and be saved unset).
+ */
+function effectiveConfig(view: InstanceView): Record<string, unknown> {
+  const parsed = view.plugin?.configSchema.safeParse(view.config.config);
+  return parsed?.success ? (parsed.data as Record<string, unknown>) : view.config.config;
+}
+
 /** Only allow redirects back to our own pages. */
 function safeReturn(value: unknown): string | undefined {
   const v = typeof value === 'string' ? value : '';
@@ -212,7 +221,7 @@ export function createWebApp(opts: WebOptions): Hono {
               <div class="help">Display name for this {plugin.kind}.</div>
               <input type="text" name="label" value={view.config.label ?? ''} placeholder={plugin.name} />
             </label>
-            <SettingsFields schema={plugin.configSchema} values={extra?.values ?? view.config.config} errors={extra?.errors} />
+            <SettingsFields schema={plugin.configSchema} values={extra?.values ?? effectiveConfig(view)} errors={extra?.errors} />
             <div class="actions">
               <button>Save{view.config.enabled ? ' and restart' : ''}</button>
             </div>
@@ -253,9 +262,9 @@ export function createWebApp(opts: WebOptions): Hono {
       if (!view.plugin) return c.text('Unknown plugin', 400);
       // `all`: repeated fields (checkbox groups) arrive as arrays.
       const form = await c.req.parseBody({ all: true });
-      const raw = parseSettingsForm(view.plugin.configSchema, form, view.config.config);
+      const raw = parseSettingsForm(view.plugin.configSchema, form, effectiveConfig(view));
       const result = await registry.saveConfig(view.config.id, raw, String(form.label ?? ''));
-      if (!result.ok) return instancePage(c, view, { errors: issuesByField(result.issues), values: { ...view.config.config, ...raw } });
+      if (!result.ok) return instancePage(c, view, { errors: issuesByField(result.issues), values: { ...effectiveConfig(view), ...raw } });
       return c.redirect(`/instances/${view.config.id}?notice=saved`);
     }),
   );
