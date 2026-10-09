@@ -1,6 +1,9 @@
 # syntax=docker/dockerfile:1
 FROM node:22-alpine AS base
 WORKDIR /app
+# Build-time downloads (corepack's pnpm, packages): prefer IPv4, since many Docker networks have no
+# working IPv6 and Node otherwise tries the address order DNS returns.
+ENV NODE_OPTIONS=--dns-result-order=ipv4first
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
