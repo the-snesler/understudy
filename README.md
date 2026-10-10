@@ -2,9 +2,9 @@
 
 Understudy performs your Discord presence when your own client can't. It's a small self-hosted
 server that watches what you're doing elsewhere and shows it on your Discord profile:
-- "Watching Plex", with the poster and a progress bar;
-- "Listening to Plex", with album art;
-- "Playing Nintendo Switch", with the game.
+- "Watching Plex" (or Jellyfin, Emby, Trakt), with the poster and a progress bar;
+- "Listening to Plex" (or Last.fm, ListenBrainz), with album art;
+- "Playing Nintendo Switch" or "Playing Steam", with the game.
 
 <img width="2826" height="2116" alt="image" src="https://github.com/user-attachments/assets/9480dda1-10dc-4b36-897f-82481be4acbb" />
 <img width="299" height="408" alt="image" src="https://github.com/user-attachments/assets/fdf98ce1-830b-41c6-9e23-85fe76a8c144" />
@@ -13,8 +13,13 @@ It doesn't need the Discord desktop app on the machine doing the playing.
 
 - **Sources:**
   - **Plex** (via Tautulli): movies, episodes and music.
+  - **Jellyfin / Emby**: movies, episodes and music.
+  - **Trakt**: movies and episodes from anything that scrobbles to Trakt (Infuse, Kodi, browser
+    extensions, …).
+  - **Last.fm / ListenBrainz**: music from anything that scrobbles.
   - **Nintendo Switch** (via [nxapi](https://github.com/samuelthomas2774/nxapi)): Switch and
     Switch 2 games.
+  - **Steam**: what you're playing, including on a Steam Deck in Game Mode.
   - **Manual**: set an activity from the web UI.
 - **Output: Discord.**
   - Only while you're actually on Discord, with your real status.
@@ -129,6 +134,71 @@ Discord loads artwork itself, so images must be public HTTPS URLs. In order:
 The text lines are templates, e.g. `S{seasonPadded}E{episodePadded}[ · {episodeTitle}]`. Text in
 `[brackets]` is dropped when a variable inside is empty. The settings page lists every variable.
 
+## Jellyfin / Emby setup
+
+On the Jellyfin / Emby page, set:
+- the **Server type**;
+- the **Server URL** (e.g. `http://jellyfin:8096`, with your base URL if you set one; for Emby,
+  leave off `/emby`) and an **API key** (Jellyfin: Dashboard → API Keys; Emby: Settings → API Keys);
+- **Users**: your username. Otherwise anyone playing from your server shows up as you.
+
+Movies, episodes and music are shown, plus music videos and audiobooks. The activity is named after
+the server type ("Watching Jellyfin") unless you set a name. Use **Clients or devices** to only show
+some apps (e.g. `Finamp`) or devices (e.g. `Living Room TV`).
+
+Artwork works as for Plex: TMDB posters (with a TMDB key), iTunes/Deezer album art, optionally the
+server's own images served through this app (needs an HTTPS `PUBLIC_URL`), then a fallback image.
+The text lines are templates too; the settings page lists every variable.
+
+## Trakt setup
+
+Trakt shows what you're watching in anything that scrobbles to it: Infuse, Kodi, browser
+extensions for streaming sites, and so on. You need your own Trakt API app:
+
+1. [Create an API app](https://app.trakt.tv/settings/apps/api/new) on Trakt. This needs a verified
+   GitHub account connected to Trakt. Name it anything. For **Redirect URI** enter
+   `urn:ietf:wg:oauth:2.0:oob`; this app signs in with a code, so it never redirects anywhere
+   (Trakt may warn that it isn't an https address; that's fine here).
+2. On the Trakt page of this app, enter the app's **Client ID**. The client secret is optional;
+   Trakt has deprecated it.
+3. Then either:
+   - **Public profile:** set **Trakt username** to the name in your profile URL
+     (`trakt.tv/users/<name>`). Nothing else is needed.
+   - **Private profile:** choose **Connect Trakt**, open the link shown and enter the code. The
+     page updates once you've approved it. Leave the username empty to show the connected account.
+     Tokens are renewed automatically; **Disconnect** revokes and deletes them.
+
+Trakt is polled every 30 seconds by default, and the progress bar follows Trakt's own start and
+end times. Trakt has no paused state: when you pause, your player stops scrobbling and the
+activity goes away. When Trakt limits requests, polling waits as long as it asks.
+
+Trakt doesn't allow its own images to be hotlinked, so posters come from **TMDB** if you add a TMDB
+API key or read access token, then from the **fallback image**. The buttons can link to IMDb (or
+TMDB) and the Trakt page. The text lines are templates, as for Plex.
+
+## Last.fm / ListenBrainz setup
+
+Anything that scrobbles (Apple Music, YouTube Music, Tidal, Plexamp, a car stereo…) can show as
+"Listening to Last.fm". On the Last.fm / ListenBrainz page, choose the **Service** and set:
+- **Last.fm:** your **username** and an **API key**. Create one at
+  <https://www.last.fm/api/account/create>; any name will do, and the callback URL can stay empty.
+  Your recent listening must be public (Last.fm → Settings → Privacy).
+- **ListenBrainz:** your **username**. A **user token** (listenbrainz.org → Settings) is optional;
+  it's sent with each request if you set it.
+
+Neither service says when a track started, so the elapsed time counts from when this app first saw
+it (up to one poll interval late). A progress bar is shown only when the track's length is known
+(ListenBrainz usually sends it; for Last.fm it's looked up once per track) and the app saw the track
+start. Both services keep reporting a track for a while after you stop playing, so a track is hidden
+2 minutes after it should have ended, or, if its length isn't known, after **Hide after** minutes.
+
+Artwork, in order: Last.fm's own image, the Cover Art Archive (when the track has a MusicBrainz
+release id), iTunes/Deezer album art (no key needed), then the **fallback image**.
+
+If Plex or Jellyfin music also scrobbles (e.g. Plexamp to Last.fm), both sources report the same
+track. The Discord output shows one of them, by its source priority list; put the one you prefer
+higher.
+
 ## Nintendo Switch setup
 
 Nintendo's API doesn't let you read your own presence, so this reads it from the friend list of a
@@ -170,6 +240,30 @@ After a network error polling backs off and continues, and it waits as long as n
 (`Retry-After`). Any other error stops polling until you choose **Try again** on the Nintendo
 Switch page, because the service's terms forbid other automatic retries.
 
+## Steam setup
+
+This shows what Steam says you're playing, so games on a Steam Deck in Game Mode (where Discord
+isn't running) still show up. On the Steam page, set:
+- a **Steam Web API key** from <https://steamcommunity.com/dev/apikey>. Any domain name will do.
+  Steam may refuse keys to limited accounts (ones that have never spent money in the store).
+- **Steam profile**: your SteamID64, your profile URL (`steamcommunity.com/profiles/…` or `/id/…`),
+  or just your custom URL name.
+
+Steam only reports your game if your profile's **Game details** are visible to the account the key
+belongs to. Public (Steam → your profile → Edit Profile → Privacy Settings) is what's known to work;
+**My profile** must be public too, since Game details can't be more public than it. If you're
+Invisible or Offline on Steam, your game isn't shown either. **Test connection** warns when
+Steam says the profile isn't visible.
+
+Steam is polled every 30 seconds. Games show as "Playing Steam" (or whatever you set as the
+activity name, e.g. "Steam Deck"), with the game's store header image and, optionally, a
+"View on Steam" button. Non-Steam games added to Steam show by name, with the fallback image.
+
+**Playing on a PC that runs Discord?** Then Discord already shows the game itself, and this would
+show it a second time. Add those games to **Ignore games** (by name, or by the app id from the store
+URL, e.g. `1145360` from `store.steampowered.com/app/1145360/`), so only games played elsewhere
+(like on the Deck) come from here.
+
 ## Troubleshooting
 
 - **The Discord page shows a session list.** Open "Your Discord clients" to see every session
@@ -191,7 +285,12 @@ src/
   plugins/     sources and outputs; register new ones in plugins/index.ts
     discord/   OAuth (PKCE), REST client, headless session, activity mapping, publisher
     tautulli/  Plex via Tautulli: polling, filters, templates, artwork (TMDB, iTunes, signed proxy)
+    jellyfin/  Jellyfin and Emby: session polling, filters, templates, artwork (TMDB, iTunes, signed proxy)
+    trakt/     Trakt: watching polls, device-code sign-in with token refresh, templates, TMDB posters
+    scrobbler/ Last.fm / ListenBrainz now playing: polling, first-seen timing, artwork (Cover Art Archive, iTunes)
     nintendo/  Nintendo Switch via nxapi: consent, sign-in, friend picker, presence polling
+    steam/     Steam via the Web API: profile resolution, presence polling, store artwork
+    shared/    helpers used by several sources: TMDB posters, album art, Retry-After, timestamp smoothing
     manual/    the hand-driven test source
   core/controls.ts   app-wide pause; core/schedule.ts   quiet-hour windows
   web/         Hono + JSX server-rendered UI with htmx, and settings forms built from zod schemas

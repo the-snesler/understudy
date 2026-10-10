@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CoralAuthData, Friend_4 } from 'nxapi/coral';
+import { parseRetryAfter } from '../shared/http.js';
 
 /**
  * Access to the Nintendo Switch Online app's API (Coral) through nxapi, behind a small interface so
@@ -155,14 +156,6 @@ function fromNintendo(url: string): boolean {
   } catch {
     return true; // unknown origin: treat it as Nintendo, which is never retried
   }
-}
-
-/** Retry-After as milliseconds: delay-seconds or an HTTP date. */
-export function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
-  if (!value) return undefined;
-  if (/^\d+$/.test(value.trim())) return Number(value.trim()) * 1000;
-  const at = Date.parse(value);
-  return Number.isNaN(at) ? undefined : Math.max(0, at - now);
 }
 
 /** Turn an error from nxapi into a NintendoError that says whether it may be retried. */

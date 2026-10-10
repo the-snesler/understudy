@@ -1,8 +1,9 @@
 import crypto from 'node:crypto';
 import type { ActivityLink } from '../../core/activity.js';
 import { errorMessage, type Logger } from '../../core/log.js';
+import { AlbumArtFinder } from '../shared/album-art.js';
+import { externalLinks, TmdbClient, type ExternalIds } from '../shared/tmdb.js';
 import type { TautulliClient, TautulliMetadata, TautulliSession } from './client.js';
-import { AlbumArtFinder } from './music.js';
 import { mediaKind, metadataKey, sessionKey, thumbPath } from './session.js';
 
 /**
@@ -13,11 +14,7 @@ import { mediaKind, metadataKey, sessionKey, thumbPath } from './session.js';
  * key), then this app's own signed image proxy (needs a public HTTPS PUBLIC_URL), then a fallback.
  */
 
-export interface ExternalIds {
-  imdb?: string;
-  tmdb?: string;
-  tvdb?: string;
-}
+export type { ExternalIds };
 
 export interface Artwork {
   url?: string;
@@ -37,8 +34,6 @@ export interface ArtworkOptions {
   fetchImpl?: typeof fetch;
 }
 
-const TMDB_API = 'https://api.themoviedb.org/3';
-const TMDB_IMAGES = 'https://image.tmdb.org/t/p/w500';
 const MAX_CACHE = 200;
 const FAILURE_TTL_MS = 10 * 60 * 1000;
 
@@ -58,10 +53,12 @@ export class ArtworkResolver {
   private readonly cache = new Map<string, { at: number; failed: boolean; value: Artwork }>();
   private readonly fetchImpl: typeof fetch;
   private readonly albums: AlbumArtFinder;
+  private readonly tmdb: TmdbClient | undefined;
 
   constructor(private readonly opts: ArtworkOptions) {
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.albums = new AlbumArtFinder(this.fetchImpl);
+    this.tmdb = opts.tmdbKey ? new TmdbClient(opts.tmdbKey, this.fetchImpl) : undefined;
   }
 
   async resolve(s: TautulliSession): Promise<Artwork> {
@@ -89,9 +86,10 @@ export class ArtworkResolver {
     if (kind === 'movie' || kind === 'episode') {
       const mk = metadataKey(s);
       const ids = mk ? parseGuids(await this.opts.client.metadata(mk)) : {};
-      links = linksFor(kind, ids);
-      if (this.opts.tmdbKey) {
-        const poster = await this.tmdbPoster(kind === 'movie' ? 'movie' : 'tv', ids);
+      const type = kind === 'movie' ? 'movie' : 'tv';
+      links = externalLinks(type, ids);
+      if (this.tmdb) {
+        const poster = await this.tmdb.poster(type, ids);
         if (poster) return { url: poster, source: 'tmdb', links };
       }
     } else if (kind === 'track' && this.opts.albumArt) {
@@ -108,47 +106,6 @@ export class ArtworkResolver {
     if (this.opts.fallback) return { url: this.opts.fallback, source: 'fallback', links };
     return { source: 'none', links };
   }
-
-  private async tmdb<T>(path: string, params: Record<string, string> = {}): Promise<T> {
-    const key = this.opts.tmdbKey!;
-    const url = new URL(`${TMDB_API}${path}`);
-    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-    const headers: Record<string, string> = { Accept: 'application/json' };
-    // A v4 "read access token" is a JWT; a v3 API key is a short hex string.
-    if (key.startsWith('eyJ')) headers.Authorization = `Bearer ${key}`;
-    else url.searchParams.set('api_key', key);
-    const res = await this.fetchImpl(url, { headers, signal: AbortSignal.timeout(10_000) });
-    if (res.status === 404) return {} as T;
-    if (!res.ok) throw new Error(`TMDB ${path.split('/')[1]} request failed (${res.status})`);
-    return (await res.json()) as T;
-  }
-
-  private async tmdbPoster(type: 'movie' | 'tv', ids: ExternalIds): Promise<string | undefined> {
-    type Item = { poster_path?: string | null };
-    if (ids.tmdb) {
-      const item = await this.tmdb<Item>(`/${type}/${ids.tmdb}`);
-      if (item.poster_path) return TMDB_IMAGES + item.poster_path;
-    }
-    const lookups: [string | undefined, string][] = [
-      [ids.imdb, 'imdb_id'],
-      [type === 'tv' ? ids.tvdb : undefined, 'tvdb_id'],
-    ];
-    for (const [id, source] of lookups) {
-      if (!id) continue;
-      const found = await this.tmdb<{ movie_results?: Item[]; tv_results?: Item[] }>(`/find/${id}`, {
-        external_source: source,
-      });
-      const item = (type === 'movie' ? found.movie_results : found.tv_results)?.[0];
-      if (item?.poster_path) return TMDB_IMAGES + item.poster_path;
-    }
-    return undefined;
-  }
-}
-
-function linksFor(kind: 'movie' | 'episode', ids: ExternalIds): ActivityLink[] {
-  if (ids.imdb) return [{ label: 'IMDb', url: `https://www.imdb.com/title/${ids.imdb}/` }];
-  if (ids.tmdb) return [{ label: 'TMDB', url: `https://www.themoviedb.org/${kind === 'movie' ? 'movie' : 'tv'}/${ids.tmdb}` }];
-  return [];
 }
 
 // ---- signed image proxy ------------------------------------------------------------------------
