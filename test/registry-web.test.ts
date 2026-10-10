@@ -112,6 +112,27 @@ describe('Registry', () => {
     await expect(registry.add('test-output')).rejects.toThrow(/only be added once/);
   });
 
+  it('only creates defaults on first run, so removed instances stay removed', async () => {
+    const { registry, dir } = setup();
+    const defaults = [
+      { plugin: 'test-output', enabled: true },
+      { plugin: 'test-source', enabled: true },
+    ];
+    await registry.ensureInstances(defaults);
+    await registry.remove('test-source');
+
+    const restarted = new Registry({
+      plugins: [testSource, testOutput],
+      config: new JsonStore<AppConfig>(path.join(dir, 'config.json'), emptyConfig),
+      state: new JsonStore<Record<string, unknown>>(path.join(dir, 'state.json'), () => ({})),
+      hub: new Hub(),
+      log: new Logger(new LogBuffer(), 'test', 'error'),
+      env: { publicUrl: undefined },
+    });
+    await restarted.ensureInstances(defaults);
+    expect(restarted.list().map((v) => v.config.id)).toEqual(['test-output']);
+  });
+
   it('persists config with private file permissions', async () => {
     const { registry, dir } = setup();
     await registry.ensureInstances([{ plugin: 'test-source', enabled: false }]);

@@ -91,9 +91,13 @@ export class Registry {
       .map((v) => ({ id: v.config.id, label: v.label, enabled: v.config.enabled }));
   }
 
-  /** Make sure an instance of each listed plugin exists (first run). */
+  /**
+   * Add an instance of each listed plugin on first run. Does nothing once a config file exists, so
+   * instances the user removed stay removed.
+   */
   ensureInstances(defaults: { plugin: string; enabled: boolean }[]): Promise<void> {
     return this.serial(async () => {
+      if (this.opts.config.existed) return;
       for (const d of defaults) {
         if (this.opts.config.get().instances.some((i) => i.plugin === d.plugin)) continue;
         await this.addConfig(d.plugin, d.enabled);

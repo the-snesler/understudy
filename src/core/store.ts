@@ -8,12 +8,16 @@ import path from 'node:path';
 export class JsonStore<T> {
   private value: T;
   private writing: Promise<void> = Promise.resolve();
+  /** Whether the file was on disk when the store was opened, as opposed to starting from defaults. */
+  readonly existed: boolean;
 
   constructor(
     readonly file: string,
     defaults: () => T,
   ) {
-    this.value = JsonStore.read(file) ?? defaults();
+    const saved = JsonStore.read<T>(file);
+    this.existed = saved !== undefined;
+    this.value = saved ?? defaults();
   }
 
   private static read<T>(file: string): T | undefined {
