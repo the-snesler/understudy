@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import { getConnInfo } from '@hono/node-server/conninfo';
 import { Hono, type Context } from 'hono';
-import { basicAuth } from 'hono/basic-auth';
+import { contextStorage } from 'hono/context-storage';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { csrf } from 'hono/csrf';
 import { describeActivity } from '../core/activity.js';
 import type { Controls } from '../core/controls.js';
@@ -9,9 +11,10 @@ import type { Hub } from '../core/hub.js';
 import type { LogBuffer, LogEntry } from '../core/log.js';
 import type { AppEnv, PanelProps } from '../core/plugin.js';
 import type { InstanceView, Registry } from '../core/registry.js';
+import { Auth, newSessionSecret, SESSION_COOKIE, SESSION_TTL_MS } from './auth.js';
 import { issuesByField, parseSettingsForm, SettingsFields } from './forms.js';
 import { APPLE_TOUCH_ICON, ICON } from './icon.js';
-import { Health, Layout, Notice, timeAgo } from './layout.js';
+import { Health, Layout, LoginPage, Notice, timeAgo } from './layout.js';
 
 const require = createRequire(import.meta.url);
 const HTMX = fs.readFileSync(require.resolve('htmx.org/dist/htmx.min.js'), 'utf8');
@@ -32,6 +35,8 @@ export interface WebOptions {
   logs: LogBuffer;
   env: AppEnv;
   uiPassword: string | undefined;
+  /** Signs session cookies. Persist it so sign-ins survive restarts; random if omitted. */
+  sessionSecret?: string;
   /** App-wide controls (pause). Optional so tests can omit it. */
   controls?: Controls;
 }
@@ -61,6 +66,10 @@ const PAUSE_OPTIONS: [string, number | undefined][] = [
 export function createWebApp(opts: WebOptions): Hono {
   const { registry, hub, logs, env } = opts;
   const app = new Hono();
+  // Lets the layout see whether the request is signed in.
+  app.use('*', contextStorage());
+
+  const origin = (c: Context) => env.publicUrl ?? new URL(c.req.url).origin;
 
   app.get('/healthz', (c) => c.json({ ok: true }));
   app.get('/static/htmx.min.js', (c) => {
@@ -87,8 +96,82 @@ export function createWebApp(opts: WebOptions): Hono {
   });
 
   if (opts.uiPassword) {
-    const password = opts.uiPassword;
-    app.use('*', basicAuth({ verifyUser: (_user, pass) => pass === password, realm: 'understudy' }));
+    const auth = new Auth(opts.uiPassword, opts.sessionSecret ?? newSessionSecret());
+
+    const clientOf = (c: Context) => {
+      try {
+        return getConnInfo(c).remote.address ?? 'unknown';
+      } catch {
+        return 'unknown'; // not served by @hono/node-server (tests)
+      }
+    };
+    const startSession = (c: Context) =>
+      setCookie(c, SESSION_COOKIE, auth.issue(), {
+        path: '/',
+        httpOnly: true,
+        sameSite: 'Lax',
+        secure: origin(c).startsWith('https:') || c.req.header('x-forwarded-proto') === 'https',
+        maxAge: SESSION_TTL_MS / 1000,
+      });
+    const lockedMessage = (ms: number) => `Too many wrong passwords. Try again in ${Math.ceil(ms / 60_000)} minutes.`;
+    const loginPath = (next: string | undefined) => {
+      const n = safeReturn(next);
+      return n && n !== '/' && !n.startsWith('/login') ? `/login?next=${encodeURIComponent(n)}` : '/login';
+    };
+
+    app.get('/login', (c) => {
+      if (auth.verify(getCookie(c, SESSION_COOKIE))) return c.redirect(safeReturn(c.req.query('next')) ?? '/');
+      return c.html(<LoginPage next={safeReturn(c.req.query('next'))} />);
+    });
+    app.post('/login', csrf(), async (c) => {
+      const form = await c.req.parseBody();
+      const next = safeReturn(form.next);
+      const client = clientOf(c);
+      const locked = auth.lockedFor(client);
+      if (locked) return c.html(<LoginPage next={next} error={lockedMessage(locked)} />, 429);
+      if (!auth.checkPassword(String(form.password ?? ''))) {
+        auth.recordFailure(client);
+        return c.html(<LoginPage next={next} error="Wrong password." />, 401);
+      }
+      startSession(c);
+      return c.redirect(next && !next.startsWith('/login') ? next : '/', 303);
+    });
+
+    app.use('*', async (c, next) => {
+      const expires = auth.verify(getCookie(c, SESSION_COOKIE));
+      if (expires) {
+        if (expires - Date.now() < SESSION_TTL_MS / 2) startSession(c);
+        c.set('signedIn', true);
+        return next();
+      }
+      // The JSON API also takes the password as basic auth (any username), for automations.
+      if (c.req.path.startsWith('/api/')) {
+        const header = c.req.header('authorization') ?? '';
+        if (header.startsWith('Basic ')) {
+          const client = clientOf(c);
+          const locked = auth.lockedFor(client);
+          if (locked) return c.json({ error: lockedMessage(locked) }, 429);
+          const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
+          if (auth.checkPassword(decoded.slice(decoded.indexOf(':') + 1))) return next();
+          auth.recordFailure(client);
+        }
+        c.header('WWW-Authenticate', 'Basic realm="understudy", charset="UTF-8"');
+        return c.json({ error: 'Unauthorized' }, 401);
+      }
+      // htmx polling after the session ended: send the whole page to the sign-in screen.
+      if (c.req.header('hx-request')) {
+        const current = c.req.header('hx-current-url');
+        c.header('HX-Redirect', loginPath(current ? new URL(current, c.req.url).pathname : undefined));
+        return c.body(null, 401);
+      }
+      const url = new URL(c.req.url);
+      return c.redirect(loginPath(c.req.method === 'GET' ? url.pathname + url.search : undefined), 303);
+    });
+
+    app.post('/logout', csrf(), (c) => {
+      deleteCookie(c, SESSION_COOKIE, { path: '/' });
+      return c.redirect('/login', 303);
+    });
   }
   // API POSTs must be JSON: browsers send saved basic-auth credentials even on cross-site requests, and a
   // cross-site form can't send application/json, so this keeps the API safe from forged requests.
@@ -99,8 +182,6 @@ export function createWebApp(opts: WebOptions): Hono {
     await next();
   });
   app.use('*', csrf());
-
-  const origin = (c: Context) => env.publicUrl ?? new URL(c.req.url).origin;
 
   // ---- dashboard -------------------------------------------------------------------------------
   const Dashboard = () => {

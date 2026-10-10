@@ -1,5 +1,6 @@
 import { LogBuffer, Logger } from '../src/core/log.js';
 import type { NowPlaying } from '../src/core/activity.js';
+import type { Hono } from 'hono';
 
 export function quietLogger(): Logger {
   return new Logger(new LogBuffer(), 'test', 'error');
@@ -41,4 +42,16 @@ export function scriptedFetch(responses: Array<{ status: number; body?: unknown;
     });
   }) as typeof fetch;
   return { impl, calls };
+}
+
+/** Sign in through the login form; returns headers that carry the session cookie. */
+export async function signIn(app: Hono, password: string): Promise<{ Cookie: string }> {
+  const res = await app.request('/login', {
+    method: 'POST',
+    body: new URLSearchParams({ password }),
+    headers: { Origin: 'http://localhost', 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
+  const cookie = res.headers.get('set-cookie')?.split(';')[0];
+  if (res.status !== 303 || !cookie) throw new Error(`Sign-in failed: ${res.status}`);
+  return { Cookie: cookie };
 }

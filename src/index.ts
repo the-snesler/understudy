@@ -6,6 +6,7 @@ import { Controls } from './core/controls.js';
 import { emptyConfig, Registry, type AppConfig } from './core/registry.js';
 import { JsonStore, ScopedState } from './core/store.js';
 import { plugins } from './plugins/index.js';
+import { newSessionSecret } from './web/auth.js';
 import { createWebApp } from './web/app.js';
 
 const env = process.env;
@@ -33,7 +34,15 @@ await registry.ensureInstances([
 ]);
 await registry.startAll();
 
-const app = createWebApp({ registry, hub, logs, env: { publicUrl }, uiPassword: env.UI_PASSWORD || undefined, controls });
+// Signs UI sessions; kept in state.json so sign-ins survive restarts.
+const authState = new ScopedState<{ sessionSecret?: string }>(state, '_auth');
+let sessionSecret = authState.get()?.sessionSecret;
+if (env.UI_PASSWORD && !sessionSecret) {
+  sessionSecret = newSessionSecret();
+  await authState.set({ sessionSecret });
+}
+
+const app = createWebApp({ registry, hub, logs, env: { publicUrl }, uiPassword: env.UI_PASSWORD || undefined, sessionSecret, controls });
 const server = serve({ fetch: app.fetch, port }, (info) => {
   log.info(`Web UI on http://localhost:${info.port} (data in ${dataDir})`);
   if (!env.UI_PASSWORD) log.warn('UI_PASSWORD is not set; anyone who can reach the web UI can change settings.');

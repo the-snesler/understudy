@@ -50,7 +50,7 @@ pnpm test
 |---|---|---|
 | `PORT` | `8080` | |
 | `DATA_DIR` | `./data` (`/data` in Docker) | `config.json` (settings) and `state.json` (tokens). Both are mode 600. |
-| `UI_PASSWORD` | unset | Basic-auth password for the web UI (any username). Set it: the UI holds your Discord tokens. |
+| `UI_PASSWORD` | unset | Password for the web UI's sign-in page (and the JSON API). Set it: the UI holds your Discord tokens. Changing it signs everyone out. |
 | `PUBLIC_URL` | request origin | The URL you open the UI at, if that differs from what the server sees (e.g. behind a reverse proxy). Used for the OAuth redirect URI, and, if it's public HTTPS, for the optional artwork proxy. |
 | `TZ` | system zone | Default time zone for quiet hours (e.g. `America/Chicago`). Each Discord output can override it. |
 | `NXAPI_AUTH_CLIENT_ID` | unset | Default nxapi-auth client ID for the Nintendo Switch source. |
@@ -95,8 +95,9 @@ The dashboard has a **Pause publishing** switch: 30 minutes, 1 hour, 4 hours, or
 While paused, the Discord output withdraws the activity. A pause survives restarts and ends by
 itself when timed. To stop a single source or output, use its Disable button instead.
 
-The same controls are available as a JSON API, using the UI password (any username). POST requests
-must send `Content-Type: application/json`, which keeps them safe from cross-site forgery.
+The same controls are available as a JSON API, using the UI password as HTTP basic auth (any
+username). POST requests must send `Content-Type: application/json`, which keeps them safe from
+cross-site forgery.
 
 ```sh
 curl -u :PASSWORD http://localhost:8080/api/status            # pause state and every source/output

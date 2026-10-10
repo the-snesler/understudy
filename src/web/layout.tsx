@@ -1,3 +1,4 @@
+import { tryGetContext } from 'hono/context-storage';
 import { raw } from 'hono/html';
 import type { Child } from 'hono/jsx';
 import type { InstanceHealth } from '../core/plugin.js';
@@ -43,32 +44,64 @@ pre { background: var(--bg); padding: .75rem; border-radius: 6px; overflow-x: au
 .lvl-warn { color: var(--warn); } .lvl-error { color: var(--err); }
 .card.paused { border-color: var(--warn); }
 button.small { padding: .2rem .6rem; font-size: .85rem; }
+header .logout { margin-left: auto; } header .logout button { background: none; border: 0; padding: 0; color: var(--muted); }
+.login { max-width: 22rem; margin: 12vh auto 0; } .login h1 { text-align: center; } .login button { width: 100%; margin-top: 1rem; }
 `;
 
-export function Layout(props: { title: string; children: Child }) {
+export function Layout(props: { title: string; children: Child; bare?: boolean }) {
+  const signedIn = tryGetContext()?.get('signedIn');
   return (
-    <html lang="en">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>{`${props.title} · Understudy`}</title>
-        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-        <style dangerouslySetInnerHTML={{ __html: CSS }} />
-        <script src="/static/htmx.min.js" defer></script>
-      </head>
-      <body>
-        <header>
-          <a class="brand" href="/">
-            {raw(ICON_INLINE)}
-            Understudy
-          </a>
-          <a href="/">Dashboard</a>
-          <a href="/log">Log</a>
-        </header>
-        <main>{props.children}</main>
-      </body>
-    </html>
+    <>
+      {raw('<!DOCTYPE html>')}
+      <html lang="en">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>{`${props.title} · Understudy`}</title>
+          <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+          <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+          <style dangerouslySetInnerHTML={{ __html: CSS }} />
+          <script src="/static/htmx.min.js" defer></script>
+        </head>
+        <body>
+          <header>
+            <a class="brand" href="/">
+              {raw(ICON_INLINE)}
+              Understudy
+            </a>
+            {!props.bare && (
+              <>
+                <a href="/">Dashboard</a>
+                <a href="/log">Log</a>
+              </>
+            )}
+            {signedIn && (
+              <form class="inline logout" method="post" action="/logout">
+                <button>Log out</button>
+              </form>
+            )}
+          </header>
+          <main>{props.children}</main>
+        </body>
+      </html>
+    </>
+  );
+}
+
+export function LoginPage(props: { next?: string; error?: string }) {
+  return (
+    <Layout title="Sign in" bare>
+      <form class="card login" method="post" action="/login">
+        <h1>Sign in</h1>
+        {props.error && <Notice kind="error">{props.error}</Notice>}
+        {props.next && <input type="hidden" name="next" value={props.next} />}
+        <label>
+          Password
+          <input type="password" name="password" autocomplete="current-password" required autofocus />
+        </label>
+        <button>Sign in</button>
+      </form>
+    </Layout>
   );
 }
 

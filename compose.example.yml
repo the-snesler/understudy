@@ -9,7 +9,7 @@ services:
     volumes:
       - ./data:/data
     environment:
-      # Password for the web UI (any username). Strongly recommended: the UI holds your Discord tokens.
+      # Password for the web UI's sign-in page. Strongly recommended: the UI holds your Discord tokens.
       UI_PASSWORD: change-me
       # The URL you open the UI at, if it differs from what the container sees (e.g. behind a
       # reverse proxy). Used for the Discord OAuth redirect URI.

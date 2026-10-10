@@ -12,7 +12,7 @@ import { inWindows, isValidTimeZone, minutesInZone, parseWindows } from '../src/
 import { JsonStore, ScopedState } from '../src/core/store.js';
 import { Publisher, type SessionLike } from '../src/plugins/discord/publisher.js';
 import { createWebApp } from '../src/web/app.js';
-import { movie, quietLogger } from './helpers.js';
+import { movie, quietLogger, signIn } from './helpers.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -158,17 +158,18 @@ describe('web pause controls and API', () => {
     c.start();
     const app = createWebApp({ registry, hub, logs, env: { publicUrl: undefined }, uiPassword: 'pw', controls: c });
     const auth = { Authorization: `Basic ${Buffer.from('ha:pw').toString('base64')}` };
-    return { app, hub, registry, auth, c };
+    const session = await signIn(app, 'pw');
+    return { app, hub, registry, auth, session, c };
   }
 
   it('pauses and resumes from the dashboard', async () => {
     const t = await boot();
     const form = (p: string, body: Record<string, string>) =>
-      t.app.request(p, { method: 'POST', body: new URLSearchParams(body), headers: { ...t.auth, Origin: 'http://localhost', 'Content-Type': 'application/x-www-form-urlencoded' } });
-    expect(await (await t.app.request('/', { headers: t.auth })).text()).toContain('Pause publishing');
+      t.app.request(p, { method: 'POST', body: new URLSearchParams(body), headers: { ...t.session, Origin: 'http://localhost', 'Content-Type': 'application/x-www-form-urlencoded' } });
+    expect(await (await t.app.request('/', { headers: t.session })).text()).toContain('Pause publishing');
     await form('/pause', { minutes: '60' });
     expect(t.c.pauseInfo()).toMatchObject({ paused: true });
-    expect(await (await t.app.request('/partials/dashboard', { headers: t.auth })).text()).toContain('Publishing is paused');
+    expect(await (await t.app.request('/partials/dashboard', { headers: t.session })).text()).toContain('Publishing is paused');
     await form('/resume', {});
     expect(t.c.pauseInfo().paused).toBe(false);
 
@@ -184,6 +185,9 @@ describe('web pause controls and API', () => {
   it('offers a JSON API behind the same password', async () => {
     const t = await boot();
     expect((await t.app.request('/api/status')).status).toBe(401);
+    expect((await t.app.request('/api/status', { headers: { Authorization: `Basic ${Buffer.from('ha:nope').toString('base64')}` } })).status).toBe(401);
+    // A signed-in browser can use it too.
+    expect((await t.app.request('/api/status', { headers: t.session })).status).toBe(200);
     const status = (await (await t.app.request('/api/status', { headers: t.auth })).json()) as { pause: { paused: boolean }; instances: { id: string }[] };
     expect(status.pause.paused).toBe(false);
     expect(status.instances.map((i) => i.id)).toEqual(['src']);

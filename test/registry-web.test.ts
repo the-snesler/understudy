@@ -10,7 +10,7 @@ import { emptyConfig, Registry, type AppConfig } from '../src/core/registry.js';
 import { JsonStore } from '../src/core/store.js';
 import { createWebApp } from '../src/web/app.js';
 import { parseSettingsForm } from '../src/web/forms.js';
-import { movie } from './helpers.js';
+import { movie, signIn } from './helpers.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -221,14 +221,98 @@ describe('web app', () => {
     const { registry, hub, logs } = setup();
     const app = createWebApp({ registry, hub, logs, env: { publicUrl: undefined }, uiPassword: 'pw' });
     expect((await app.request('/healthz')).status).toBe(200);
-    expect((await app.request('/')).status).toBe(401);
-    const auth = { Authorization: `Basic ${Buffer.from('admin:pw').toString('base64')}` };
-    expect((await app.request('/', { headers: auth })).status).toBe(200);
+    const session = await signIn(app, 'pw');
+    expect((await app.request('/', { headers: session })).status).toBe(200);
     const res = await app.request('/instances', {
       method: 'POST',
       body: new URLSearchParams({ plugin: 'test-source' }),
-      headers: { ...auth, Origin: 'https://evil.example', 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { ...session, Origin: 'https://evil.example', 'Content-Type': 'application/x-www-form-urlencoded' },
     });
     expect(res.status).toBe(403);
+  });
+
+  describe('sign-in', () => {
+    const login = (app: ReturnType<typeof createWebApp>, body: Record<string, string>, origin = 'http://localhost') =>
+      app.request('/login', {
+        method: 'POST',
+        body: new URLSearchParams(body),
+        headers: { Origin: origin, 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
+
+    it('sends signed-out visitors to the sign-in page and back', async () => {
+      const { registry, hub, logs } = setup();
+      const app = createWebApp({ registry, hub, logs, env: { publicUrl: undefined }, uiPassword: 'pw' });
+
+      const page = await app.request('/instances/x?notice=saved');
+      expect(page.status).toBe(303);
+      expect(page.headers.get('location')).toBe('/login?next=%2Finstances%2Fx%3Fnotice%3Dsaved');
+      expect(page.headers.get('www-authenticate')).toBeNull(); // no browser password prompt
+      expect((await app.request('/')).headers.get('location')).toBe('/login');
+      const form = await (await app.request('/login?next=/log')).text();
+      expect(form).toMatch(/^<!DOCTYPE html><html/);
+      expect(form).toContain('type="password"');
+      expect(form).toContain('name="next" value="/log"');
+      expect(form).not.toContain('Log out');
+
+      // Basic auth is only for the API.
+      const basic = { Authorization: `Basic ${Buffer.from('admin:pw').toString('base64')}` };
+      expect((await app.request('/', { headers: basic })).status).toBe(303);
+
+      const ok = await login(app, { password: 'pw', next: '/log' });
+      expect(ok.status).toBe(303);
+      expect(ok.headers.get('location')).toBe('/log');
+      const cookie = ok.headers.get('set-cookie') ?? '';
+      expect(cookie).toMatch(/^understudy_session=/);
+      expect(cookie).toMatch(/HttpOnly/i);
+      expect(cookie).toMatch(/SameSite=Lax/i);
+      const session = { Cookie: cookie.split(';')[0]! };
+      expect(await (await app.request('/', { headers: session })).text()).toContain('Log out');
+      expect((await app.request('/login', { headers: session })).headers.get('location')).toBe('/');
+
+      // Open redirects are refused.
+      expect((await login(app, { password: 'pw', next: '//evil.example' })).headers.get('location')).toBe('/');
+
+      // htmx polls get told to reload into the sign-in page instead of swapping it in.
+      const poll = await app.request('/partials/dashboard', { headers: { 'HX-Request': 'true', 'HX-Current-URL': 'http://localhost/instances/x' } });
+      expect(poll.status).toBe(401);
+      expect(poll.headers.get('hx-redirect')).toBe('/login?next=%2Finstances%2Fx');
+
+      const out = await app.request('/logout', { method: 'POST', headers: { ...session, Origin: 'http://localhost' } });
+      expect(out.headers.get('location')).toBe('/login');
+      expect(out.headers.get('set-cookie')).toMatch(/understudy_session=;.*Max-Age=0/);
+    });
+
+    it('rejects wrong passwords, forged cookies and cross-site sign-ins', async () => {
+      const { registry, hub, logs } = setup();
+      const app = createWebApp({ registry, hub, logs, env: { publicUrl: undefined }, uiPassword: 'pw', sessionSecret: 's1' });
+      const wrong = await login(app, { password: 'nope' });
+      expect(wrong.status).toBe(401);
+      expect(wrong.headers.get('set-cookie')).toBeNull();
+      expect(await wrong.text()).toContain('Wrong password.');
+      expect((await login(app, { password: 'pw' }, 'https://evil.example')).status).toBe(403);
+
+      const session = await signIn(app, 'pw');
+      const [value] = session.Cookie.split('=').slice(1);
+      const [expires, sig] = value!.split('.');
+      const forged = { Cookie: `understudy_session=${Number(expires) + 1000}.${sig}` };
+      expect((await app.request('/', { headers: forged })).status).toBe(303);
+
+      // Sessions survive a restart with the same secret, but not a password change.
+      const again = createWebApp({ registry, hub, logs, env: { publicUrl: undefined }, uiPassword: 'pw', sessionSecret: 's1' });
+      expect((await again.request('/', { headers: session })).status).toBe(200);
+      const changed = createWebApp({ registry, hub, logs, env: { publicUrl: undefined }, uiPassword: 'pw2', sessionSecret: 's1' });
+      expect((await changed.request('/', { headers: session })).status).toBe(303);
+    });
+
+    it('locks out after repeated wrong passwords', async () => {
+      const { registry, hub, logs } = setup();
+      const app = createWebApp({ registry, hub, logs, env: { publicUrl: undefined }, uiPassword: 'pw' });
+      for (let i = 0; i < 10; i++) expect((await login(app, { password: `guess${i}` })).status).toBe(401);
+      const locked = await login(app, { password: 'pw' });
+      expect(locked.status).toBe(429);
+      expect(await locked.text()).toContain('Too many wrong passwords');
+      const basic = { Authorization: `Basic ${Buffer.from('ha:pw').toString('base64')}` };
+      expect((await app.request('/api/status', { headers: basic })).status).toBe(429);
+    });
   });
 });
