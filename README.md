@@ -1,3 +1,5 @@
+<img src="assets/icon.svg" alt="" width="96" align="right">
+
 # Understudy
 
 Understudy performs your Discord presence when your own client can't. It's a small self-hosted

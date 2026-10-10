@@ -10,6 +10,7 @@ import type { LogBuffer, LogEntry } from '../core/log.js';
 import type { AppEnv, PanelProps } from '../core/plugin.js';
 import type { InstanceView, Registry } from '../core/registry.js';
 import { issuesByField, parseSettingsForm, SettingsFields } from './forms.js';
+import { APPLE_TOUCH_ICON, ICON } from './icon.js';
 import { Health, Layout, Notice, timeAgo } from './layout.js';
 
 const require = createRequire(import.meta.url);
@@ -66,6 +67,16 @@ export function createWebApp(opts: WebOptions): Hono {
     c.header('Content-Type', 'text/javascript; charset=utf-8');
     c.header('Cache-Control', 'public, max-age=86400');
     return c.body(HTMX);
+  });
+  app.get('/favicon.svg', (c) => {
+    c.header('Content-Type', 'image/svg+xml');
+    c.header('Cache-Control', 'public, max-age=86400');
+    return c.body(ICON);
+  });
+  app.get('/apple-touch-icon.png', (c) => {
+    c.header('Content-Type', 'image/png');
+    c.header('Cache-Control', 'public, max-age=86400');
+    return c.body(APPLE_TOUCH_ICON);
   });
 
   // Plugin routes that must work without the UI password (images for Discord, webhooks).

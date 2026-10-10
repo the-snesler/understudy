@@ -1,5 +1,7 @@
+import { raw } from 'hono/html';
 import type { Child } from 'hono/jsx';
 import type { InstanceHealth } from '../core/plugin.js';
+import { ICON_INLINE } from './icon.js';
 
 const CSS = `
 :root { color-scheme: light dark; --fg: #1d1f23; --muted: #6b7079; --bg: #f6f7f9; --card: #fff; --line: #dfe2e7;
@@ -8,7 +10,8 @@ const CSS = `
 * { box-sizing: border-box; }
 body { margin: 0; font: 15px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
 header { display: flex; gap: 1.5rem; align-items: center; padding: .75rem 1.5rem; border-bottom: 1px solid var(--line); background: var(--card); }
-header a { color: var(--fg); text-decoration: none; } header .brand { font-weight: 700; }
+header a { color: var(--fg); text-decoration: none; } header .brand { font-weight: 700; display: flex; align-items: center; gap: .45rem; }
+header .icon { width: 1.4rem; height: 1.4rem; }
 main { max-width: 960px; margin: 0 auto; padding: 1.5rem; }
 h1 { font-size: 1.4rem; margin: 0 0 1rem; } h2 { font-size: 1.1rem; margin: 0 0 .75rem; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
@@ -49,12 +52,15 @@ export function Layout(props: { title: string; children: Child }) {
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{`${props.title} · Understudy`}</title>
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <style dangerouslySetInnerHTML={{ __html: CSS }} />
         <script src="/static/htmx.min.js" defer></script>
       </head>
       <body>
         <header>
           <a class="brand" href="/">
+            {raw(ICON_INLINE)}
             Understudy
           </a>
           <a href="/">Dashboard</a>
