@@ -100,11 +100,12 @@ describe('session mapping', () => {
   it('maps a paused episode', () => {
     const a = toNowPlaying(episodeSession, { name: 'Plex', templates, now: 1_000_000 });
     expect(a).toMatchObject({ kind: 'watching', title: 'Twin Peaks', subtitle: 'S01E01 · Pilot', paused: true });
+    expect(a.statusLine).toBeUndefined();
   });
 
   it('maps a track as listening', () => {
     const a = toNowPlaying(trackSession, { name: 'Plex', templates, now: 1_000_000 });
-    expect(a).toMatchObject({ kind: 'listening', title: 'Windowlicker', subtitle: 'by Aphex Twin' });
+    expect(a).toMatchObject({ kind: 'listening', title: 'Windowlicker', subtitle: 'Aphex Twin', statusLine: 'subtitle' });
   });
 
   it('filters by user and player, case-insensitively', () => {

@@ -111,7 +111,7 @@ describe('Publisher and pause', () => {
       clear: async () => void (calls.push('clear'), (active = false)),
     };
     const p = new Publisher({
-      config: { applicationId: '1', sourcePriority: [], paused: 'last', statusDisplay: 'details', refreshMinutes: 5 },
+      config: { applicationId: '1', sourcePriority: [], paused: 'last', refreshMinutes: 5 },
       session,
       log: quietLogger(),
       sources: () => [{ id: 'm', label: 'm', enabled: true }],

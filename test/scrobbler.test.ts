@@ -248,6 +248,7 @@ describe('track mapping and timing', () => {
       name: 'ListenBrainz',
       title: 'Shelter',
       subtitle: 'by Porter Robinson & Madeon · Shelter',
+      statusLine: 'subtitle',
     });
     expect(trackKey('Last.fm', { ...song, track: 'SHELTER' })).toBe('lastfm:porter robinson & madeon|shelter|shelter');
     expect(trackLink({ ...song, url: 'https://www.last.fm/x', recordingMbid: RECORDING })).toEqual({ label: 'Last.fm', url: 'https://www.last.fm/x' });
@@ -339,7 +340,8 @@ describe('scrobbler plugin', () => {
       kind: 'listening',
       name: 'Last.fm',
       title: 'Windowlicker',
-      subtitle: 'by Aphex Twin',
+      subtitle: 'Aphex Twin',
+      statusLine: 'subtitle',
       largeImage: { url: 'https://lastfm.freetls.fastly.net/i/u/300x300/abc.png', text: 'Windowlicker' },
       smallImage: { url: 'lastfm', text: 'Last.fm' },
       startedAt: seenAt,

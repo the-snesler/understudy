@@ -122,6 +122,8 @@ export function toNowPlaying(
     title: title || s.full_title || s.title || 'Something',
   };
   if (subtitle) activity.subtitle = subtitle;
+  // "Listening to <track>" means little at a glance; the artist does.
+  if (kind === 'track') activity.statusLine = 'subtitle';
 
   const offset = num(s.view_offset);
   const duration = num(s.duration);

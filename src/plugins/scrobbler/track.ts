@@ -49,6 +49,8 @@ export function toNowPlaying(
   };
   const subtitle = renderTemplate(opts.subtitleTemplate, vars);
   if (subtitle) activity.subtitle = subtitle;
+  // "Listening to <track>" means little at a glance; the artist does.
+  activity.statusLine = 'subtitle';
   return activity;
 }
 

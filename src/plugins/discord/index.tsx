@@ -49,14 +49,6 @@ const configSchema = z.object({
       description:
         '"hide" = clear your status while paused, like Spotify does. "last" = show paused activities only when nothing is playing. "show" = treat them like playing ones.',
     }),
-  statusDisplay: z
-    .enum(['details', 'name', 'state'])
-    .default('details')
-    .meta({
-      title: 'Short status shows',
-      description:
-        'What the member list and DM list show: "details" = the title (e.g. "Watching The Matrix"), "name" = the app name ("Watching Plex"), "state" = the second line.',
-    }),
   refreshMinutes: z
     .number()
     .int()

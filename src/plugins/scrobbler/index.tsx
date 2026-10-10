@@ -47,7 +47,7 @@ const configSchema = z.object({
     .default('')
     .meta({ title: 'Activity name', description: 'Shown as "Listening to <name>". Leave empty for "Last.fm" or "ListenBrainz".' }),
   titleTemplate: z.string().default('{track}').meta({ title: 'First line', description: VARS_HELP }),
-  subtitleTemplate: z.string().default('[by {artist}]').meta({ title: 'Second line', description: '' }),
+  subtitleTemplate: z.string().default('{artist}').meta({ title: 'Second line', description: '' }),
   progressBar: z
     .boolean()
     .default(true)

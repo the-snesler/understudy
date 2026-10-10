@@ -57,7 +57,7 @@ const configSchema = z.object({
   episodeTitle: template('Episode: first line', '{show}', ''),
   episodeSubtitle: template('Episode: second line', '[S{seasonPadded}E{episodePadded}][ · {episodeTitle}]', ''),
   trackTitle: template('Track: first line', '{track}', 'Also used for music videos.'),
-  trackSubtitle: template('Track: second line', '[by {artist}]', ''),
+  trackSubtitle: template('Track: second line', '{artist}', ''),
   tmdbKey: z
     .string()
     .trim()

@@ -1,15 +1,13 @@
-import type { ActivityImage, ActivityKind, NowPlaying } from '../../core/activity.js';
+import type { ActivityImage, ActivityKind, ActivityLine, NowPlaying } from '../../core/activity.js';
 import type { DiscordActivity } from './headless.js';
-
-export type StatusDisplay = 'name' | 'state' | 'details';
 
 export interface MappingOptions {
   applicationId: string;
-  statusDisplay: StatusDisplay;
 }
 
 const TYPE: Record<ActivityKind, DiscordActivity['type']> = { playing: 0, listening: 2, watching: 3 };
-const STATUS_DISPLAY: Record<StatusDisplay, 0 | 1 | 2> = { name: 0, state: 1, details: 2 };
+/** Which field Discord's short status (member list, DMs) shows: 0 = name, 1 = state, 2 = details. */
+const STATUS_DISPLAY: Record<ActivityLine, 0 | 1 | 2> = { name: 0, subtitle: 1, title: 2 };
 
 // Discord's limits for activity text fields and asset strings.
 const MAX_TEXT = 128;
@@ -24,7 +22,7 @@ export function toDiscordActivity(np: NowPlaying, opts: MappingOptions): Discord
     supported_platforms: ['desktop'],
     type: TYPE[np.kind],
     name: clip(np.name) || 'Activity',
-    status_display_type: STATUS_DISPLAY[opts.statusDisplay],
+    status_display_type: STATUS_DISPLAY[statusLine(np)],
   };
 
   const details = text(np.title);
@@ -59,6 +57,12 @@ export function toDiscordActivity(np: NowPlaying, opts: MappingOptions): Discord
   if (buttons.length) activity.buttons = buttons;
 
   return activity;
+}
+
+/** An empty subtitle would leave the short status as "Paused" (or Discord's fallback), so use the title. */
+function statusLine(np: NowPlaying): ActivityLine {
+  const line = np.statusLine ?? 'title';
+  return line === 'subtitle' && !np.subtitle?.trim() ? 'title' : line;
 }
 
 function clip(value: string | undefined, max = MAX_TEXT): string {

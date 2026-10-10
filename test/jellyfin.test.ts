@@ -102,6 +102,7 @@ describe('session mapping', () => {
   it('maps a paused episode', () => {
     const a = toNowPlaying(episodeSession, { name: 'Emby', templates, now: 1_000_000 });
     expect(a).toMatchObject({ kind: 'watching', name: 'Emby', title: 'Twin Peaks', subtitle: 'S01E01 · Pilot', paused: true });
+    expect(a.statusLine).toBeUndefined();
   });
 
   it('drops the episode number when there is none', () => {
@@ -113,12 +114,14 @@ describe('session mapping', () => {
     expect(toNowPlaying(trackSession, { name: 'Jellyfin', templates, now: 1_000_000 })).toMatchObject({
       kind: 'listening',
       title: 'Windowlicker',
-      subtitle: 'by Aphex Twin',
+      subtitle: 'Aphex Twin',
+      statusLine: 'subtitle',
     });
     const book: JellyfinSession = { NowPlayingItem: { Id: 'b', Name: 'Chapter 3', Type: 'AudioBook', MediaType: 'Audio', Album: 'Dune' } };
     expect(toNowPlaying(book, { name: 'Jellyfin', templates, now: 0 })).toMatchObject({ kind: 'listening', title: 'Chapter 3', subtitle: 'Dune' });
+    expect(toNowPlaying(book, { name: 'Jellyfin', templates, now: 0 }).statusLine).toBeUndefined();
     const video: JellyfinSession = { NowPlayingItem: { Id: 'v', Name: 'Around the World', Type: 'MusicVideo', MediaType: 'Video', Artists: ['Daft Punk'] } };
-    expect(toNowPlaying(video, { name: 'Jellyfin', templates, now: 0 })).toMatchObject({ kind: 'watching', subtitle: 'by Daft Punk' });
+    expect(toNowPlaying(video, { name: 'Jellyfin', templates, now: 0 })).toMatchObject({ kind: 'watching', subtitle: 'Daft Punk', statusLine: 'subtitle' });
   });
 
   it('filters by user and by client or device, case-insensitively', () => {

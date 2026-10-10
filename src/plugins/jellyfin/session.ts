@@ -142,6 +142,8 @@ export function toNowPlaying(s: JellyfinSession, opts: { name: string; templates
     title: title || item.Name || item.SeriesName || 'Something',
   };
   if (subtitle) activity.subtitle = subtitle;
+  // "Listening to <track>" means little at a glance; the artist does.
+  if (kind === 'track' || kind === 'musicVideo') activity.statusLine = 'subtitle';
 
   const position = ticksToMs(s.PlayState?.PositionTicks);
   const duration = ticksToMs(item.RunTimeTicks);

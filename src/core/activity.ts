@@ -4,6 +4,9 @@
 
 export type ActivityKind = 'playing' | 'watching' | 'listening';
 
+/** A line of the activity: the `name`, `title` or `subtitle`. */
+export type ActivityLine = 'name' | 'title' | 'subtitle';
+
 export interface ActivityImage {
   /** Public HTTPS URL. Outputs may also accept their own asset references (e.g. a Discord asset key). */
   url: string;
@@ -24,8 +27,13 @@ export interface NowPlaying {
   name: string;
   /** Primary line, e.g. the movie, episode, track or game. */
   title: string;
-  /** Secondary line, e.g. "by Artist" or "S01E02 · Pilot". */
+  /** Secondary line, e.g. "Artist" or "S01E02 · Pilot". */
   subtitle?: string;
+  /**
+   * The line a one-line summary shows (e.g. Discord's member list: "Listening to Artist"). Defaults
+   * to `title`; an empty `subtitle` falls back to `title` too.
+   */
+  statusLine?: ActivityLine;
   largeImage?: ActivityImage;
   smallImage?: ActivityImage;
   /** Epoch milliseconds. */

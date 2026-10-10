@@ -3,7 +3,7 @@ import { toDiscordActivity } from '../src/plugins/discord/mapping.js';
 import { pick, type PublisherConfig } from '../src/plugins/discord/publisher.js';
 import { movie } from './helpers.js';
 
-const opts = { applicationId: '1557839419422285984', statusDisplay: 'details' as const };
+const opts = { applicationId: '1557839419422285984' };
 
 describe('toDiscordActivity', () => {
   it('maps a playing movie', () => {
@@ -39,8 +39,11 @@ describe('toDiscordActivity', () => {
   it('maps kinds and status display', () => {
     expect(toDiscordActivity(movie({ kind: 'listening' }), opts).type).toBe(2);
     expect(toDiscordActivity(movie({ kind: 'playing' }), opts).type).toBe(0);
-    expect(toDiscordActivity(movie(), { ...opts, statusDisplay: 'name' }).status_display_type).toBe(0);
-    expect(toDiscordActivity(movie(), { ...opts, statusDisplay: 'state' }).status_display_type).toBe(1);
+    expect(toDiscordActivity(movie(), opts).status_display_type).toBe(2);
+    expect(toDiscordActivity(movie({ statusLine: 'name' }), opts).status_display_type).toBe(0);
+    expect(toDiscordActivity(movie({ statusLine: 'subtitle' }), opts).status_display_type).toBe(1);
+    // Without a subtitle the state would be empty or just "Paused", so the short status uses the title.
+    expect(toDiscordActivity(movie({ statusLine: 'subtitle', subtitle: undefined, paused: true }), opts).status_display_type).toBe(2);
   });
 
   it('enforces Discord field limits', () => {
@@ -73,7 +76,6 @@ describe('pick', () => {
     applicationId: '1',
     sourcePriority: ['plex', 'switch'],
     paused: 'last',
-    statusDisplay: 'details',
     refreshMinutes: 5,
   };
   const sources = ['plex', 'switch', 'other'].map((id) => ({ id, label: id, enabled: true }));

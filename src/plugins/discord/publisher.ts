@@ -3,7 +3,7 @@ import type { HubState } from '../../core/hub.js';
 import { errorMessage, type Logger } from '../../core/log.js';
 import type { SourceInfo } from '../../core/plugin.js';
 import type { DiscordActivity } from './headless.js';
-import { toDiscordActivity, type StatusDisplay } from './mapping.js';
+import { toDiscordActivity } from './mapping.js';
 
 /** Decides whether presence may be shown at all (e.g. only while the user is really online). */
 export interface PresenceGate {
@@ -18,7 +18,6 @@ export interface PublisherConfig {
   sourcePriority: string[];
   /** Paused activities: hidden, ranked below playing ones, or treated like playing ones. */
   paused: 'hide' | 'last' | 'show';
-  statusDisplay: StatusDisplay;
   /** Re-send interval; keeps the session alive (expires after ~20 min) and recovers from Invisible. */
   refreshMinutes: number;
 }
