@@ -17,10 +17,10 @@ function setup(responses: Parameters<typeof scriptedFetch>[0]) {
   });
   let current: GatewayActivity | null = null;
   const gateway = {
-    get showing() {
-      return current !== null;
+    get presence() {
+      return { activities: current ? [current] : [] };
     },
-    setActivity: (a: GatewayActivity | null) => void (current = a),
+    setActivityAndWait: async (a: GatewayActivity | null) => { current = a; return current !== null; },
   } as unknown as DiscordGateway;
   return { presence: new GatewayPresence(gateway, api, '123', quietLogger()), calls: fetch.calls, current: () => current };
 }

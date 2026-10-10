@@ -49,7 +49,7 @@ export interface GatewayActivity {
   metadata?: { button_urls?: string[] };
 }
 
-interface Presence {
+export interface Presence {
   since: 0;
   activities: GatewayActivity[];
   status: string;
@@ -84,6 +84,8 @@ const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000];
 const STALE_GRACE_MS = 2 * 60_000;
 /** Minimum spacing between presence updates (Discord rate-limits op 3). */
 const PRESENCE_GAP_MS = 2_000;
+/** Do not let a disconnected socket hold an output send indefinitely. */
+const PRESENCE_CONFIRM_MS = 15_000;
 /** Minimum spacing between corrections when Discord reports a different status than we sent. */
 const CORRECTION_GAP_MS = 15_000;
 /** Discord's session list can lag our own update by a moment; only correct after this. */
@@ -101,6 +103,11 @@ const FATAL = new Map<number, string>([
 ]);
 /** Close codes after which the session can't be resumed. */
 const NO_RESUME = new Set([4004, 4007, 4009]);
+
+interface PresenceRequest {
+  activity: string;
+  finish(error?: Error, presence?: Presence): void;
+}
 
 export class DiscordGateway {
   state: GatewayState = 'stopped';
@@ -132,6 +139,8 @@ export class DiscordGateway {
   private lastCorrectionAt = 0;
   private presenceTimer: ReturnType<typeof setTimeout> | undefined;
   private correctionTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly presenceRequests = new Set<PresenceRequest>();
+  private readonly presenceListeners = new Set<(presence: Presence) => void>();
   private readonly createSocket: (url: string) => SocketLike;
   private readonly random: () => number;
 
@@ -170,7 +179,37 @@ export class DiscordGateway {
   /** Show an activity on this session, or pass null to be invisible again. */
   setActivity(activity: GatewayActivity | null): void {
     this.activity = activity;
+    const key = JSON.stringify(activity);
+    for (const request of this.presenceRequests) {
+      if (request.activity !== key) request.finish(new Error('The Discord presence update was superseded'));
+    }
     this.syncPresence();
+  }
+
+  /** Resolve only once this request is confirmed on the open socket, including a gated Invisible. */
+  setActivityAndWait(activity: GatewayActivity | null): Promise<boolean> {
+    return new Promise<boolean>((resolve, reject) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const request: PresenceRequest = {
+        activity: JSON.stringify(activity),
+        finish: (error, presence) => {
+          if (!this.presenceRequests.delete(request)) return;
+          clearTimeout(timer);
+          if (error) reject(error);
+          else resolve(!!presence?.activities.length);
+        },
+      };
+      timer = setTimeout(() => request.finish(new Error('Discord did not send the presence update before the connection timed out')), PRESENCE_CONFIRM_MS);
+      timer.unref?.();
+      this.presenceRequests.add(request);
+      try { this.setActivity(activity); } catch (error) { request.finish(error instanceof Error ? error : new Error(String(error))); }
+    });
+  }
+
+  /** Presence events are emitted after socket.send succeeds, never just for a desired update. */
+  subscribePresence(listener: (presence: Presence) => void): () => void {
+    this.presenceListeners.add(listener);
+    return () => this.presenceListeners.delete(listener);
   }
 
   start(): void {
@@ -182,11 +221,14 @@ export class DiscordGateway {
 
   stop(): void {
     this.state = 'stopped';
+    this.activity = null;
+    this.rejectPresenceRequests('The Discord Gateway stopped before sending the presence update');
     clearTimeout(this.reconnectTimer);
     this.stopHeartbeat();
     // 1000 ends the session immediately, rather than leaving it to time out.
     if (this.socket && this.socket.readyState === OPEN) this.socket.close(1000, 'stopping');
     this.socket = undefined;
+    this.sendFn = undefined;
     this.resetSession();
     this.forgetSessions();
     this.opts.onChange();
@@ -319,10 +361,13 @@ export class DiscordGateway {
 
   /** Send our presence if it changed, at most once per PRESENCE_GAP_MS. */
   private syncPresence(force = false): void {
-    if (this.state !== 'ready' || !this.sendFn) return;
+    if (this.state !== 'ready' || !this.sendFn || this.socket?.readyState !== OPEN) return;
     const presence = this.desiredPresence();
     const json = JSON.stringify(presence);
-    if (!force && json === this.sentJson) return;
+    if (!force && json === this.sentJson) {
+      this.confirmPresenceRequests(presence);
+      return;
+    }
     const wait = this.lastPresenceAt + PRESENCE_GAP_MS - Date.now();
     if (wait > 0) {
       this.presenceTimer ??= setTimeout(() => {
@@ -331,10 +376,32 @@ export class DiscordGateway {
       }, wait);
       return;
     }
+    try {
+      this.sendFn(3, presence);
+    } catch (error) {
+      this.rejectPresenceRequests(`Could not send Discord presence: ${errorMessage(error)}`);
+      this.opts.log.warn(`Could not send Discord presence: ${errorMessage(error)}`);
+      this.socket?.close(4000, 'presence send failed');
+      return;
+    }
     this.lastPresenceAt = Date.now();
     this.sentPresence = presence;
     this.sentJson = json;
-    this.sendFn(3, presence);
+    this.confirmPresenceRequests(presence);
+    for (const listener of this.presenceListeners) {
+      try { listener(presence); } catch (error) { this.opts.log.error(`Presence observer failed: ${errorMessage(error)}`); }
+    }
+  }
+
+  private confirmPresenceRequests(presence: Presence): void {
+    const key = JSON.stringify(this.activity);
+    for (const request of this.presenceRequests) {
+      if (request.activity === key) request.finish(undefined, presence);
+    }
+  }
+
+  private rejectPresenceRequests(message: string): void {
+    for (const request of this.presenceRequests) request.finish(new Error(message));
   }
 
   /** If Discord reports our session with a different status than we sent, send it again. */
@@ -421,6 +488,7 @@ export class DiscordGateway {
   private fail(message: string): void {
     this.state = 'failed';
     this.lastError = message;
+    this.rejectPresenceRequests(message);
     this.resetSession();
     this.forgetSessions();
     this.opts.log.error(message);

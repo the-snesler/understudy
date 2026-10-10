@@ -20,8 +20,11 @@ export interface PublisherConfig {
 /** What the publisher needs from the headless session; a seam for tests. */
 export interface SessionLike {
   readonly active: boolean;
-  upsert(activity: DiscordActivity): Promise<void>;
+  /** False means the transport confirmed an inactive presence after its own final gates. */
+  upsert(activity: DiscordActivity): Promise<void | boolean>;
   clear(): Promise<void>;
+  /** Notify when the transport itself sends an inactive presence (e.g. the user goes Invisible). */
+  subscribeCleared?(listener: () => void): () => void;
 }
 
 export interface PublishedState {
@@ -47,6 +50,7 @@ export class Publisher {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private timerAt = Infinity;
   private refreshTimer: ReturnType<typeof setInterval> | undefined;
+  private unsubscribeCleared: (() => void) | undefined;
   private inFlight = false;
   private readonly idleWaiters = new Set<() => void>();
   private pending = false;
@@ -72,6 +76,10 @@ export class Publisher {
   ) {}
 
   start(): void {
+    this.unsubscribeCleared = this.opts.session.subscribeCleared?.(() => {
+      this.confirmCleared();
+      this.opts.reportSuccess?.();
+    });
     this.refreshTimer = setInterval(() => {
       if (this.published) this.kick(true);
     }, this.opts.config.refreshMinutes * 60_000);
@@ -84,12 +92,17 @@ export class Publisher {
     this.stopped = true;
     clearTimeout(this.timer);
     clearInterval(this.refreshTimer);
-    if (this.inFlight) await new Promise<void>((resolve) => this.idleWaiters.add(resolve));
-    if (this.opts.ready() && this.opts.session.active) {
-      await this.opts.session.clear();
-      this.confirmCleared();
+    try {
+      if (this.inFlight) await new Promise<void>((resolve) => this.idleWaiters.add(resolve));
+      if (this.opts.ready() && this.opts.session.active) {
+        await this.opts.session.clear();
+        this.confirmCleared();
+      }
+      this.published = null;
+    } finally {
+      this.unsubscribeCleared?.();
+      this.unsubscribeCleared = undefined;
     }
-    this.published = null;
   }
 
   onState(state: HubState): void {
@@ -194,12 +207,16 @@ export class Publisher {
     try {
       if (target) {
         const discord = toDiscordActivity(target.activity, this.opts.config);
-        await this.opts.session.upsert(discord);
-        if (!this.published || this.published.activity.key !== target.activity.key) {
-          this.opts.log.info(`Showing "${discord.name}: ${discord.details ?? ''}" from ${target.sourceId}`);
+        const shown = await this.opts.session.upsert(discord);
+        if (shown === false) {
+          this.confirmCleared();
+        } else {
+          if (!this.published || this.published.activity.key !== target.activity.key) {
+            this.opts.log.info(`Showing "${discord.name}: ${discord.details ?? ''}" from ${target.sourceId}`);
+          }
+          this.published = { sourceId: target.sourceId, activity: target.activity, discord, sentAt: Date.now() };
+          this.opts.reportShown?.(target);
         }
-        this.published = { sourceId: target.sourceId, activity: target.activity, discord, sentAt: Date.now() };
-        this.opts.reportShown?.(target);
       } else {
         if (this.published) this.opts.log.info('Nothing to show; clearing presence');
         await this.opts.session.clear();

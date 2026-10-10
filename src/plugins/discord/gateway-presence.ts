@@ -22,15 +22,21 @@ export class GatewayPresence implements SessionLike {
   ) {}
 
   get active(): boolean {
-    return this.gateway.showing;
+    return !!this.gateway.presence?.activities.length;
   }
 
-  async upsert(activity: DiscordActivity): Promise<void> {
-    this.gateway.setActivity(await this.convert(activity));
+  async upsert(activity: DiscordActivity): Promise<boolean> {
+    return this.gateway.setActivityAndWait(await this.convert(activity));
   }
 
   async clear(): Promise<void> {
-    this.gateway.setActivity(null);
+    await this.gateway.setActivityAndWait(null);
+  }
+
+  subscribeCleared(listener: () => void): () => void {
+    return this.gateway.subscribePresence((presence) => {
+      if (!presence.activities.length) listener();
+    });
   }
 
   async convert(d: DiscordActivity): Promise<GatewayActivity> {

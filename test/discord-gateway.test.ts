@@ -1,14 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DiscordGateway, onlineCheck, type GatewaySession, type SocketLike } from '../src/plugins/discord/gateway.js';
-import { quietLogger } from './helpers.js';
+import { GatewayPresence } from '../src/plugins/discord/gateway-presence.js';
+import { DiscordApi } from '../src/plugins/discord/api.js';
+import { Publisher } from '../src/plugins/discord/publisher.js';
+import { movie, quietLogger, scriptedFetch } from './helpers.js';
 
 class FakeSocket implements SocketLike {
   readyState = 1;
   sent: { op: number; d: any }[] = [];
   closed: number[] = [];
+  failSend = false;
   private listeners: Record<string, ((ev: any) => void)[]> = {};
   constructor(readonly url: string) {}
   send(data: string) {
+    if (this.failSend) throw new Error('Socket write failed');
     this.sent.push(JSON.parse(data));
   }
   close(code = 1000) {
@@ -248,6 +253,146 @@ describe('DiscordGateway', () => {
     expect(t.sockets).toHaveLength(1);
     expect(t.gw.state).toBe('stopped');
     expect(t.gw.informed).toBe(false);
+  });
+
+  it('confirms changes only after the rate-limited socket write', async () => {
+    const t = setup();
+    await t.connect([session('desk', 'online')]);
+    const confirmed = vi.fn();
+    t.gw.subscribePresence(confirmed);
+    const update = t.gw.setActivityAndWait({ type: 3, name: 'Plex' });
+    const settled = vi.fn();
+    void update.then(settled);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(settled).not.toHaveBeenCalled();
+    expect(confirmed).not.toHaveBeenCalled();
+    expect(t.gw.presence?.activities).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(update).resolves.toBe(true);
+    expect(confirmed).toHaveBeenCalledWith(expect.objectContaining({ activities: [{ type: 3, name: 'Plex' }] }));
+    const clear = t.gw.setActivityAndWait(null);
+    confirmed.mockClear();
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(confirmed).not.toHaveBeenCalled();
+    expect(t.gw.presence?.activities).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(clear).resolves.toBe(false);
+    expect(t.gw.presence?.activities).toEqual([]);
+  });
+
+  it('confirms a pending update as inactive when the real client goes Invisible first', async () => {
+    const t = setup();
+    await t.connect([session('desk', 'online')]);
+    const first = t.gw.setActivityAndWait({ type: 3, name: 'Plex', details: 'one' });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await first;
+    const changed = t.gw.setActivityAndWait({ type: 3, name: 'Plex', details: 'two' });
+    t.last().receive(0, [session('desk', 'invisible')], 'SESSIONS_REPLACE', 2);
+    expect(t.gw.presence?.activities[0]?.details).toBe('one');
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(changed).resolves.toBe(false);
+    expect(t.gw.presence?.status).toBe('invisible');
+    expect(t.last().sent.at(-1)?.d.activities).toEqual([]);
+  });
+
+  it('waits for a resumed socket to confirm a queued update', async () => {
+    const t = setup();
+    await t.connect([session('desk', 'online')]);
+    t.last().drop(1006);
+    const update = t.gw.setActivityAndWait({ type: 2, name: 'Music' });
+    const settled = vi.fn();
+    void update.then(settled);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).not.toHaveBeenCalled();
+    t.last().receive(10, { heartbeat_interval: 40_000 });
+    t.last().receive(0, null, 'RESUMED', 2);
+    await expect(update).resolves.toBe(true);
+    expect(t.last().sent.at(-1)).toMatchObject({ op: 3, d: { activities: [{ type: 2, name: 'Music' }] } });
+  });
+
+  it('rejects failed writes without recording a presence that was never sent', async () => {
+    const t = setup();
+    await t.connect([session('desk', 'online')]);
+    const confirmed = vi.fn();
+    t.gw.subscribePresence(confirmed);
+    t.last().failSend = true;
+    const update = t.gw.setActivityAndWait({ type: 3, name: 'Plex' });
+    const rejected = expect(update).rejects.toThrow('Socket write failed');
+    await vi.advanceTimersByTimeAsync(2_000);
+    await rejected;
+    expect(confirmed).not.toHaveBeenCalled();
+    expect(t.gw.presence?.activities).toEqual([]);
+  });
+
+  it('times out an unsent request without reporting it as shown or cleared', async () => {
+    const t = setup();
+    const confirmed = vi.fn();
+    t.gw.subscribePresence(confirmed);
+    const pending = t.gw.setActivityAndWait(null);
+    const rejected = expect(pending).rejects.toThrow('timed out');
+    await vi.advanceTimersByTimeAsync(15_000);
+    await rejected;
+    expect(confirmed).not.toHaveBeenCalled();
+    expect(t.gw.presence).toBeUndefined();
+  });
+
+  it('records displayed activity at actual sends and follows automatic Invisible updates', async () => {
+    const t = setup();
+    await t.connect([session('desk', 'online')]);
+    const api = new DiscordApi({
+      apiBase: 'https://discord.test/api/v10', log: quietLogger(), fetchImpl: scriptedFetch([]).impl,
+      tokens: { accessToken: async () => 'a', forceRefresh: async () => 'b' },
+    });
+    const reportShown = vi.fn();
+    const publisher = new Publisher({
+      config: { applicationId: '1', refreshMinutes: 5 },
+      session: new GatewayPresence(t.gw, api, '1', quietLogger()),
+      ready: () => true, log: quietLogger(), reportShown,
+    });
+    const selected = { sourceId: 'plex', activity: movie(), changedAt: Date.now() };
+    publisher.start();
+    publisher.onState({ activities: [selected], selected, selectionReason: 'Highest priority' });
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(reportShown).not.toHaveBeenCalled();
+    expect(publisher.current()).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reportShown).toHaveBeenLastCalledWith(selected);
+    expect(publisher.current()?.sentAt).toBe(Date.now());
+    t.last().receive(0, [session('desk', 'invisible')], 'SESSIONS_REPLACE', 2);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(reportShown).toHaveBeenLastCalledWith(selected);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reportShown).toHaveBeenLastCalledWith(null);
+    expect(publisher.current()).toBeNull();
+    await publisher.stop();
+    t.gw.stop();
+  });
+
+  it('never reports activity when the transport becomes Invisible before its queued send', async () => {
+    const t = setup();
+    await t.connect([session('desk', 'online')]);
+    const api = new DiscordApi({
+      apiBase: 'https://discord.test/api/v10', log: quietLogger(), fetchImpl: scriptedFetch([]).impl,
+      tokens: { accessToken: async () => 'a', forceRefresh: async () => 'b' },
+    });
+    const reportShown = vi.fn();
+    const publisher = new Publisher({
+      config: { applicationId: '1', refreshMinutes: 5 },
+      session: new GatewayPresence(t.gw, api, '1', quietLogger()),
+      ready: () => true, log: quietLogger(), reportShown,
+    });
+    const selected = { sourceId: 'plex', activity: movie(), changedAt: Date.now() };
+    publisher.start();
+    publisher.onState({ activities: [selected], selected, selectionReason: 'Highest priority' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    t.last().receive(0, [session('desk', 'invisible')], 'SESSIONS_REPLACE', 2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(reportShown).toHaveBeenCalledWith(null);
+    expect(reportShown.mock.calls.every((call) => call[0] === null)).toBe(true);
+    expect(publisher.current()).toBeNull();
+    expect(t.gw.presence?.activities).toEqual([]);
+    await publisher.stop();
+    t.gw.stop();
   });
 });
 
