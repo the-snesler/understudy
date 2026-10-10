@@ -11,13 +11,13 @@ import {
   NintendoAuthError,
   NintendoError,
   parseAppLink,
-  parseRetryAfter,
   type FriendInfo,
   type NintendoBackend,
   type PendingLogin,
 } from '../src/plugins/nintendo/client.js';
 import { createNintendoPlugin } from '../src/plugins/nintendo/index.js';
 import { formatPlayTime, toNowPlaying } from '../src/plugins/nintendo/presence.js';
+import { parseRetryAfter } from '../src/plugins/shared/http.js';
 import { createWebApp } from '../src/web/app.js';
 
 const main = (state: string, game?: Partial<NonNullable<FriendInfo['presence']['game']>>, platform = 2): FriendInfo => ({

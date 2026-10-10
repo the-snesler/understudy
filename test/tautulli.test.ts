@@ -12,7 +12,7 @@ import { JsonStore } from '../src/core/store.js';
 import { ArtworkResolver, parseGuids, signThumb, verifyThumb } from '../src/plugins/tautulli/artwork.js';
 import { TautulliClient, type TautulliSession } from '../src/plugins/tautulli/client.js';
 import { tautulliPlugin } from '../src/plugins/tautulli/index.js';
-import { AlbumArtFinder, normaliseAlbum } from '../src/plugins/tautulli/music.js';
+import { AlbumArtFinder, normaliseAlbum } from '../src/plugins/shared/album-art.js';
 import { chooseSession, matchesFilter, toNowPlaying } from '../src/plugins/tautulli/session.js';
 import { quietLogger, scriptedFetch } from './helpers.js';
 
