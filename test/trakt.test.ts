@@ -291,7 +291,7 @@ describe('trakt plugin', () => {
         { label: 'Trakt', url: 'https://trakt.tv/movies/the-matrix-1999' },
       ],
     });
-    expect(t.status()).toEqual({ health: 'ok', message: 'Watching The Matrix (1999)' });
+    expect(t.status()).toEqual({ health: 'ok', message: 'Watching The Matrix (1999)', lastSuccessAt: expect.any(Number) });
     expect(t.trakt.to('/users/sean/watching')[0]!.headers.has('authorization')).toBe(false);
 
     watching = null;
@@ -339,7 +339,7 @@ describe('trakt plugin', () => {
     expect(t.saved().pending).toBeUndefined();
     expect(t.hub.get('trakt')?.activity).toMatchObject({ title: 'Twin Peaks', subtitle: 'S01E02 · Traces to Nowhere' });
     expect(t.trakt.to('/users/me/watching')[0]!.headers.get('authorization')).toBe('Bearer access-1');
-    expect(t.status()).toEqual({ health: 'ok', message: 'Checked in to Twin Peaks' });
+    expect(t.status()).toEqual({ health: 'ok', message: 'Checked in to Twin Peaks', lastSuccessAt: expect.any(Number) });
     const connected = await t.page();
     expect(connected).toContain('Connected as <strong>Sean</strong>');
     expect(connected).not.toContain('access-1');
@@ -419,7 +419,7 @@ describe('trakt plugin', () => {
     expect(t.saved().tokens).toMatchObject({ accessToken: 'access-2', refreshToken: 'refresh-2' });
     await vi.advanceTimersByTimeAsync(30_000);
     expect(t.trakt.to('/oauth/token')).toHaveLength(1);
-    expect(t.status()).toEqual({ health: 'idle', message: 'Not watching anything' });
+    expect(t.status()).toEqual({ health: 'idle', message: 'Not watching anything', lastSuccessAt: expect.any(Number) });
   });
 
   it('disconnects when Trakt no longer accepts the refresh token', async () => {
@@ -461,6 +461,6 @@ describe('trakt plugin', () => {
     await vi.advanceTimersByTimeAsync(119_000);
     expect(t.trakt.to('/users/sean/watching')).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(t.status()).toEqual({ health: 'ok', message: 'Watching The Matrix (1999)' });
+    expect(t.status()).toEqual({ health: 'ok', message: 'Watching The Matrix (1999)', lastSuccessAt: expect.any(Number) });
   });
 });

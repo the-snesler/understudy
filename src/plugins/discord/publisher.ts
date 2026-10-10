@@ -1,7 +1,6 @@
 import { activitiesEquivalent, type NowPlaying, type SourceActivity } from '../../core/activity.js';
 import type { HubState } from '../../core/hub.js';
 import { errorMessage, type Logger } from '../../core/log.js';
-import type { SourceInfo } from '../../core/plugin.js';
 import type { DiscordActivity } from './headless.js';
 import { toDiscordActivity } from './mapping.js';
 
@@ -14,10 +13,6 @@ export const ALWAYS_ALLOW: PresenceGate = { check: () => ({ allowed: true }) };
 
 export interface PublisherConfig {
   applicationId: string;
-  /** Source instance ids, highest priority first. Unlisted sources rank after these. */
-  sourcePriority: string[];
-  /** Paused activities: hidden, ranked below playing ones, or treated like playing ones. */
-  paused: 'hide' | 'last' | 'show';
   /** Re-send interval; keeps the session alive (expires after ~20 min) and recovers from Invisible. */
   refreshMinutes: number;
 }
@@ -42,21 +37,23 @@ const MIN_GAP_MS = 2_000;
 const RETRY_MS = 30_000;
 
 /**
- * Picks one activity from the hub, maps it to a Discord activity and keeps the headless session in
+ * Maps the hub's selected activity to Discord and keeps the headless session in
  * sync: it sends on change (debounced), re-sends periodically, and deletes when there's nothing to show.
  */
 export class Publisher {
-  private state: HubState = { activities: [] };
+  private state: HubState = { activities: [], selected: null, selectionReason: 'No active source' };
   private desired: SourceActivity | null = null;
   private published: PublishedState | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private timerAt = Infinity;
   private refreshTimer: ReturnType<typeof setInterval> | undefined;
   private inFlight = false;
+  private readonly idleWaiters = new Set<() => void>();
   private pending = false;
   private force = false;
   private lastSendAt = 0;
   private stopped = false;
+  private disconnected = false;
   lastError: string | undefined;
   gateReason: string | undefined;
 
@@ -65,10 +62,12 @@ export class Publisher {
       config: PublisherConfig;
       session: SessionLike;
       log: Logger;
-      sources: () => SourceInfo[];
       /** False until Discord is connected; nothing is sent meanwhile. */
       ready: () => boolean;
       gate?: PresenceGate;
+      /** Record confirmed display changes; never called for a failed send. */
+      reportShown?: (activity: SourceActivity | null) => void;
+      reportSuccess?: () => void;
     },
   ) {}
 
@@ -85,7 +84,11 @@ export class Publisher {
     this.stopped = true;
     clearTimeout(this.timer);
     clearInterval(this.refreshTimer);
-    if (this.opts.ready() && this.opts.session.active) await this.opts.session.clear();
+    if (this.inFlight) await new Promise<void>((resolve) => this.idleWaiters.add(resolve));
+    if (this.opts.ready() && this.opts.session.active) {
+      await this.opts.session.clear();
+      this.confirmCleared();
+    }
     this.published = null;
   }
 
@@ -105,16 +108,44 @@ export class Publisher {
     return this.published;
   }
 
+  /** Serialize user-initiated withdrawal after any send already in progress. */
+  async disconnect(clear: () => Promise<void>): Promise<void> {
+    this.disconnected = true;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    this.timerAt = Infinity;
+    this.pending = false;
+    this.force = false;
+    if (this.inFlight) await new Promise<void>((resolve) => this.idleWaiters.add(resolve));
+    await clear();
+    this.confirmCleared();
+  }
+
+  /** Only a completed new login resumes sends after Disconnect. */
+  resume(): void {
+    this.disconnected = false;
+    this.kick(true);
+  }
+
+  /** A successful external clear (such as Disconnect) also invalidates the UI's display cache. */
+  confirmCleared(): void {
+    this.published = null;
+    this.lastError = undefined;
+    this.opts.reportShown?.(null);
+  }
+
   /** The activity that would be shown, before gating and before it's sent. */
   candidate(): SourceActivity | null {
-    return pick(this.state, this.opts.config, this.opts.sources());
+    return this.state.selected;
   }
 
   private evaluate(): void {
     const gate = this.state.paused
       ? { allowed: false, reason: 'publishing is paused' }
       : (this.opts.gate ?? ALWAYS_ALLOW).check();
-    const reason = gate.allowed ? undefined : (gate.reason ?? 'blocked');
+    const reason = gate.allowed
+      ? this.state.selected ? undefined : this.state.selectionReason === 'No active source' ? undefined : this.state.selectionReason
+      : (gate.reason ?? 'blocked');
     if (reason !== this.gateReason) this.opts.log.info(reason ? `Presence hidden: ${reason}` : 'Presence allowed again');
     this.gateReason = reason;
     this.desired = gate.allowed ? this.candidate() : null;
@@ -129,7 +160,7 @@ export class Publisher {
   }
 
   private schedule(delay: number): void {
-    if (this.stopped) return;
+    if (this.stopped || this.disconnected) return;
     const at = Math.max(Date.now() + delay, this.lastSendAt + MIN_GAP_MS);
     if (this.timer && this.timerAt <= at) return;
     clearTimeout(this.timer);
@@ -142,7 +173,7 @@ export class Publisher {
   }
 
   private async flush(): Promise<void> {
-    if (this.stopped || !this.opts.ready()) return;
+    if (this.stopped || this.disconnected || !this.opts.ready()) return;
     if (this.inFlight) {
       this.pending = true;
       return;
@@ -152,7 +183,7 @@ export class Publisher {
     if (!force && this.matchesPublished(target)) return;
     if (!target && !this.opts.session.active) {
       // Nothing shown and nothing to show: no call needed.
-      this.published = null;
+      this.confirmCleared();
       this.force = false;
       return;
     }
@@ -168,11 +199,13 @@ export class Publisher {
           this.opts.log.info(`Showing "${discord.name}: ${discord.details ?? ''}" from ${target.sourceId}`);
         }
         this.published = { sourceId: target.sourceId, activity: target.activity, discord, sentAt: Date.now() };
+        this.opts.reportShown?.(target);
       } else {
         if (this.published) this.opts.log.info('Nothing to show; clearing presence');
         await this.opts.session.clear();
-        this.published = null;
+        this.confirmCleared();
       }
+      this.opts.reportSuccess?.();
       this.lastError = undefined;
     } catch (err) {
       this.lastError = errorMessage(err);
@@ -181,29 +214,12 @@ export class Publisher {
       this.schedule(RETRY_MS);
     } finally {
       this.inFlight = false;
+      for (const resolve of this.idleWaiters) resolve();
+      this.idleWaiters.clear();
     }
     if (this.pending) {
       this.pending = false;
       this.schedule(0);
     }
   }
-}
-
-/** Choose which activity to show. Exported for tests and the UI preview. */
-export function pick(state: HubState, config: PublisherConfig, sources: SourceInfo[]): SourceActivity | null {
-  const enabled = new Set(sources.filter((s) => s.enabled).map((s) => s.id));
-  const rank = (id: string) => {
-    const i = config.sourcePriority.indexOf(id);
-    return i === -1 ? config.sourcePriority.length : i;
-  };
-  const candidates = state.activities.filter(
-    (a) => enabled.has(a.sourceId) && !(config.paused === 'hide' && a.activity.paused),
-  );
-  candidates.sort(
-    (a, b) =>
-      (config.paused === 'last' ? Number(!!a.activity.paused) - Number(!!b.activity.paused) : 0) ||
-      rank(a.sourceId) - rank(b.sourceId) ||
-      b.changedAt - a.changedAt,
-  );
-  return candidates[0] ?? null;
 }

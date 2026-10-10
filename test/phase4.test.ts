@@ -111,20 +111,19 @@ describe('Publisher and pause', () => {
       clear: async () => void (calls.push('clear'), (active = false)),
     };
     const p = new Publisher({
-      config: { applicationId: '1', sourcePriority: [], paused: 'last', refreshMinutes: 5 },
+      config: { applicationId: '1', refreshMinutes: 5 },
       session,
       log: quietLogger(),
-      sources: () => [{ id: 'm', label: 'm', enabled: true }],
       ready: () => true,
     });
     p.start();
     const activities = [{ sourceId: 'm', activity: movie(), changedAt: 0 }];
-    p.onState({ activities });
+    p.onState({ activities, selected: activities[0]!, selectionReason: 'Highest priority, then most recent' });
     await vi.advanceTimersByTimeAsync(1_500);
-    p.onState({ activities, paused: true });
+    p.onState({ activities, selected: activities[0]!, selectionReason: 'Highest priority, then most recent', paused: true });
     await vi.advanceTimersByTimeAsync(3_000);
     expect(p.gateReason).toBe('publishing is paused');
-    p.onState({ activities, paused: false });
+    p.onState({ activities, selected: activities[0]!, selectionReason: 'Highest priority, then most recent', paused: false });
     await vi.advanceTimersByTimeAsync(3_000);
     expect(calls).toEqual(['upsert', 'clear', 'upsert']);
   });
@@ -166,10 +165,10 @@ describe('web pause controls and API', () => {
     const t = await boot();
     const form = (p: string, body: Record<string, string>) =>
       t.app.request(p, { method: 'POST', body: new URLSearchParams(body), headers: { ...t.session, Origin: 'http://localhost', 'Content-Type': 'application/x-www-form-urlencoded' } });
-    expect(await (await t.app.request('/', { headers: t.session })).text()).toContain('Pause publishing');
+    expect(await (await t.app.request('/', { headers: t.session })).text()).toContain('Pause for 1 hour');
     await form('/pause', { minutes: '60' });
     expect(t.c.pauseInfo()).toMatchObject({ paused: true });
-    expect(await (await t.app.request('/partials/dashboard', { headers: t.session })).text()).toContain('Publishing is paused');
+    expect(await (await t.app.request('/partials/publishing', { headers: t.session })).text()).toContain('Publishing paused');
     await form('/resume', {});
     expect(t.c.pauseInfo().paused).toBe(false);
 

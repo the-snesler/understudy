@@ -1,7 +1,7 @@
 import type { Hono } from 'hono';
 import type { Child } from 'hono/jsx';
 import type { z } from 'zod';
-import type { NowPlaying } from './activity.js';
+import type { NowPlaying, SourceActivity } from './activity.js';
 import type { HubState } from './hub.js';
 import type { Logger } from './log.js';
 import type { ScopedState } from './store.js';
@@ -21,6 +21,8 @@ export interface InstanceStatus {
   health: InstanceHealth;
   /** One-line summary for the dashboard. */
   message: string;
+  /** Epoch ms of the last successful connection check, poll, or output send. */
+  lastSuccessAt?: number;
 }
 
 export interface AppEnv {
@@ -43,6 +45,8 @@ export interface BaseContext<C> {
   routeBase: string;
   /** URL path under which this instance's `publicRoutes` are mounted, e.g. `/public/tautulli`. */
   publicBase: string;
+  /** Call after a successful external operation, including a successful poll with no activity. */
+  reportSuccess?(): void;
 }
 
 export interface SourceContext<C> extends BaseContext<C> {
@@ -52,6 +56,8 @@ export interface SourceContext<C> extends BaseContext<C> {
 export interface OutputContext<C> extends BaseContext<C> {
   /** Every source instance, in configured order, for outputs that rank them. */
   sources(): SourceInfo[];
+  /** Confirm what the output actually shows, after its own gates and successful updates. */
+  reportShown(activity: SourceActivity | null): void;
 }
 
 export interface SourceInfo {
@@ -83,6 +89,8 @@ export interface Instance {
   panel?(props: PanelProps): Child;
   /** Read-only status UI that the instance page re-renders every few seconds. */
   live?(props: PanelProps): Child;
+  /** Runtime suggestions and connection notes supplied to the schema-driven settings form. */
+  formContext?(props: PanelProps): { suggestions?: Record<string, string[]>; notes?: Record<string, Child> };
 }
 
 export interface OutputInstance extends Instance {

@@ -2,9 +2,9 @@ import crypto from 'node:crypto';
 import type { Context, Hono } from 'hono';
 import { z } from 'zod';
 import { errorMessage } from '../../core/log.js';
-import { defaultTimeZone, inWindows, isValidTimeZone, minutesInZone, parseWindows } from '../../core/schedule.js';
 import { defineOutput, type OutputContext, type PanelProps } from '../../core/plugin.js';
 import { Layout, Notice, timeAgo } from '../../web/layout.js';
+import { Icon } from '../../web/icons.js';
 import { DiscordApi, type TokenProvider } from './api.js';
 import { GatewayPresence } from './gateway-presence.js';
 import { DiscordGateway, onlineCheck, realSessions, type GatewaySession } from './gateway.js';
@@ -22,78 +22,26 @@ import {
 } from './oauth.js';
 import { Publisher, type PresenceGate, type PublishedState } from './publisher.js';
 
+const WHEN = { title: 'When to show', description: 'Keep Discord in step with whether you’re actually on it.' };
+const APPLICATION = { title: 'Discord application', description: 'The app in Discord’s Developer Portal that Understudy signs in through.' };
 const configSchema = z.object({
-  applicationId: z
-    .string()
-    .trim()
-    .regex(/^(\d{17,21})?$/, 'Must be a numeric Discord application ID')
-    .default('')
-    .meta({
-      title: 'Application ID',
-      description:
-        'Developer Portal → your app → General Information. The app needs Public Client turned on (OAuth2 page) and the Social SDK enabled (Discord Social SDK → Getting Started).',
-    }),
-  sourcePriority: z
-    .array(z.string().trim().min(1))
-    .default([])
-    .meta({
-      title: 'Source priority',
-      description:
-        'Source instance ids, one per line, highest priority first. Discord shows one activity at a time; unlisted sources rank after these, and ties go to the most recent.',
-    }),
-  paused: z
-    .enum(['hide', 'last', 'show'])
-    .default('hide')
-    .meta({
-      title: 'Paused activities',
-      description:
-        '"hide" = clear your status while paused, like Spotify does. "last" = show paused activities only when nothing is playing. "show" = treat them like playing ones.',
-    }),
-  refreshMinutes: z
-    .number()
-    .int()
-    .min(1)
-    .max(15)
-    .default(5)
-    .meta({
-      title: 'Refresh interval (minutes)',
-      description:
-        'Headless mode only (when "Only while you are on Discord" is off): how often the activity is re-sent. Headless sessions expire after ~20 minutes, and an activity hidden while you were Invisible only reappears on the next send.',
-    }),
-  onlyWhenOnline: z
-    .boolean()
-    .default(true)
-    .meta({
-      title: 'Only while you are on Discord',
-      description:
-        'Show the activity only while one of your real Discord clients (desktop, web or mobile) is online, with the same status. It is carried by an extra Discord connection that stays invisible otherwise. Turn off to show it even when Discord is closed: that uses a headless session, which makes you appear online and lingers for a few minutes after it is removed.',
-    }),
-  onlineStatuses: z
-    .array(z.enum(['online', 'idle', 'dnd']))
-    .default(['online', 'idle', 'dnd'])
-    .meta({ title: 'Statuses that count as on Discord', description: 'Which statuses of your real clients allow the activity to show.' }),
-  quietHours: z
-    .string()
-    .trim()
-    .default('')
-    .refine((v) => {
-      try {
-        parseWindows(v);
-        return true;
-      } catch {
-        return false;
-      }
-    }, 'Use time ranges like 23:00-07:00, separated by commas')
-    .meta({
-      title: 'Quiet hours',
-      description: 'Daily times when nothing is shown, e.g. "23:00-07:00" or "09:00-17:00, 22:00-08:00". Leave empty for none.',
-    }),
-  timeZone: z
-    .string()
-    .trim()
-    .default(defaultTimeZone())
-    .refine(isValidTimeZone, 'Not a known time zone (use a name like America/Chicago)')
-    .meta({ title: 'Time zone for quiet hours', description: 'An IANA time zone name, e.g. America/Chicago. Defaults to the TZ variable or the server\'s zone.' }),
+  onlyWhenOnline: z.boolean().default(true).meta({
+    title: 'Only while I’m on Discord', group: WHEN,
+    description: 'Shows the activity only while one of your real clients (desktop, web or mobile) is on, with the same status. Understudy keeps one extra connection that stays invisible otherwise.',
+  }),
+  onlineStatuses: z.array(z.enum(['online', 'idle', 'dnd'])).default(['online', 'idle', 'dnd']).meta({
+    title: 'Statuses that count as on', group: WHEN, widget: 'segmented',
+    labels: { online: 'Online', idle: 'Idle', dnd: 'Do not disturb' },
+    showIf: { field: 'onlyWhenOnline', equals: true },
+  }),
+  refreshMinutes: z.number().int().min(1).max(15).default(5).meta({
+    title: 'Re-send every (minutes)', group: WHEN, disabledIf: { field: 'onlyWhenOnline', equals: true },
+    description: 'Only used when “Only while I’m on Discord” is off. That mode makes you appear online, and the activity lingers for a few minutes after it ends.',
+  }),
+  applicationId: z.string().trim().regex(/^(\d{17,21})?$/, 'Must be a numeric Discord application ID').default('').meta({
+    title: 'Application ID', group: APPLICATION,
+    description: 'Developer Portal → your app → General Information.',
+  }),
 });
 
 type Config = z.infer<typeof configSchema>;
@@ -194,12 +142,8 @@ function createDiscord(ctx: OutputContext<Config>) {
     },
   });
   const session = config.onlyWhenOnline ? new GatewayPresence(gateway, api, config.applicationId, log) : headless;
-  const quietWindows = parseWindows(config.quietHours);
-  const isQuiet = () => quietWindows.length > 0 && inWindows(quietWindows, minutesInZone(new Date(), config.timeZone));
-  let quietTimer: ReturnType<typeof setInterval> | undefined;
   const gate: PresenceGate = {
     check() {
-      if (isQuiet()) return { allowed: false, reason: `quiet hours (${config.quietHours})` };
       if (!config.onlyWhenOnline) return { allowed: true };
       if (!gateway.informed) {
         const why = gateway.state === 'failed' ? `can't watch your status (${gateway.lastError})` : 'checking your Discord status';
@@ -213,7 +157,7 @@ function createDiscord(ctx: OutputContext<Config>) {
     else if (gateway.state !== 'stopped') gateway.stop();
   };
 
-  const publisher = new Publisher({ config, session, log, sources: ctx.sources, ready: connected, gate });
+  const publisher = new Publisher({ config, session, log, ready: connected, gate, reportShown: ctx.reportShown, reportSuccess: ctx.reportSuccess });
 
   function redirectUri(c: Context): string {
     const origin = ctx.env.publicUrl ?? new URL(c.req.url).origin;
@@ -248,7 +192,7 @@ function createDiscord(ctx: OutputContext<Config>) {
       log.warn(`Connected, but could not look up the user: ${errorMessage(err)}`);
     }
     syncGateway();
-    publisher.kick(true);
+    publisher.resume();
   }
 
   function errorPage(c: Context, message: string, back: string) {
@@ -267,23 +211,12 @@ function createDiscord(ctx: OutputContext<Config>) {
     start() {
       publisher.start();
       syncGateway();
-      if (quietWindows.length) {
-        // Re-check when quiet hours begin or end.
-        let quiet = isQuiet();
-        quietTimer = setInterval(() => {
-          if (isQuiet() !== quiet) {
-            quiet = !quiet;
-            publisher.kick();
-          }
-        }, 30_000);
-      }
       // Switched from headless mode: withdraw what that left behind (as far as Discord allows).
       if (config.onlyWhenOnline && headless.active && connected()) {
         headless.clear().catch((err: unknown) => log.warn(`Could not delete the old headless session: ${errorMessage(err)}`));
       }
     },
     async stop() {
-      clearInterval(quietTimer);
       try {
         await publisher.stop();
       } catch (err) {
@@ -346,8 +279,10 @@ function createDiscord(ctx: OutputContext<Config>) {
 
       app.post('/disconnect', async (c) => {
         try {
-          await session.clear();
-          if (headless.active) await headless.clear();
+          await publisher.disconnect(async () => {
+            await session.clear();
+            if (headless.active) await headless.clear();
+          });
         } catch (err) {
           log.warn(`Could not withdraw the activity: ${errorMessage(err)}`);
         }
@@ -371,83 +306,58 @@ function createDiscord(ctx: OutputContext<Config>) {
       });
     },
 
-    panel(props: PanelProps) {
-      const s = read();
-      const origin = ctx.env.publicUrl ?? props.origin;
-      return (
-        <div class="card">
-          <h2>Discord connection</h2>
-          {!config.applicationId ? (
-            <p>Set the Application ID below and save, then connect.</p>
-          ) : s.tokens ? (
-            <>
-              <p>
-                Connected{s.user ? <> as <strong>{s.user.global_name || s.user.username}</strong> (@{s.user.username})</> : ''}.{' '}
-                <span class="muted small">Token renews automatically (current one expires {new Date(s.tokens.expiresAt).toLocaleString()}).</span>
-              </p>
-              <div class="actions">
-                <form class="inline" method="post" action={`${ctx.routeBase}/resend`}>
-                  <button class="secondary">Re-send now</button>
-                </form>
-                <form class="inline" method="post" action={`${ctx.routeBase}/disconnect`}>
-                  <button class="danger">Disconnect</button>
-                </form>
-              </div>
-            </>
-          ) : (
-            <>
-              {authError && <Notice kind="error">{authError}</Notice>}
-              <p>
-                In the Developer Portal, add this under <strong>OAuth2 → Redirects</strong>:
-                <br />
-                <code>{`${origin}${ctx.routeBase}/callback`}</code>
-              </p>
-              <div class="actions">
-                <a class="button" href={`${ctx.routeBase}/connect`}>
-                  Connect Discord
-                </a>
-              </div>
-              <form method="post" action={`${ctx.routeBase}/paste`}>
-                <label>
-                  Redirect page didn't load?
-                  <div class="help">
-                    That's fine if this server isn't reachable at the address above from your browser. Copy the full URL from the address
-                    bar and paste it here.
-                  </div>
-                  <input type="text" name="url" placeholder={`${origin}${ctx.routeBase}/callback?code=…`} />
-                </label>
-                <div class="actions">
-                  <button class="secondary">Finish login</button>
-                </div>
-              </form>
-            </>
-          )}
+    formContext(props: PanelProps) {
+      const redirect = `${ctx.env.publicUrl ?? props.origin}${ctx.routeBase}/callback`;
+      const signedIn = !!read().tokens;
+      // Portal switches cannot be inspected through OAuth; completion remains honest about that.
+      return { notes: { applicationId: <details class="setup-checklist field-wide">
+        <summary>Setup checklist <span class="small muted">{config.applicationId ? 'Application ID set' : 'Application ID needed'}{signedIn ? ' · signed in' : ''}</span></summary>
+        <ol class="setup-steps">
+          <li><a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer">Open your application in Discord’s Developer Portal</a> and copy its Application ID.</li>
+          <li>In <strong>OAuth2</strong>, turn on <strong>Public Client</strong>. Add this redirect URL:<div class="copy-row"><code id="discord-redirect-url">{redirect}</code><button type="button" class="btn secondary small" data-copy={redirect}>Copy</button></div></li>
+          <li>In <strong>Discord Social SDK → Getting Started</strong>, enable the Social SDK.</li>
+          <li>Save the application settings, then connect your Discord account above.</li>
+        </ol>
+      </details> } };
+    },
+
+    panel() {
+      const stored = read();
+      return <section class="card flush">
+        <div class="card-header"><div><h2>Account</h2><p class="muted small">The Discord login that carries your activity.</p></div></div>
+        <div class="card-body">
+          {stored.tokens ? <div class="account-row">
+            <div class="account-avatar">{(stored.user?.global_name || stored.user?.username || 'D').slice(0, 1).toUpperCase()}</div>
+            <div class="account-details"><strong>{stored.user?.global_name || stored.user?.username || 'Discord account'}</strong>{stored.user && <span class="muted"> @{stored.user.username}</span>}<div class="small muted">Token renews by itself · current one expires {new Date(stored.tokens.expiresAt).toLocaleString()}</div></div>
+            <form method="post" action={`${ctx.routeBase}/disconnect`}><button class="btn danger">Disconnect</button></form>
+          </div> : <>
+            {authError && <Notice kind="error">{authError}</Notice>}
+            <p class="muted">{config.applicationId ? 'Connect the account you want to show activity on.' : 'Set the Application ID and save, then connect your Discord account.'}</p>
+            {config.applicationId && <>
+              <a class="btn" href={`${ctx.routeBase}/connect`}>Connect Discord</a>
+              <details class="login-fallback"><summary class="small">Redirect page didn’t load?</summary><p class="help">Copy the complete redirect URL from your browser and paste it here to finish signing in.</p><form method="post" action={`${ctx.routeBase}/paste`}><label class="field-label" for="discord-callback-url">Redirect URL</label><input id="discord-callback-url" type="text" name="url" placeholder="https://…/callback?code=…" /><button class="btn secondary">Finish login</button></form></details>
+            </>}
+          </>}
         </div>
-      );
+      </section>;
     },
 
     live() {
       const pub = publisher.current();
-      const cand = publisher.candidate();
-      return (
-        <div class="card">
-          <h2>Now showing</h2>
-          {pub ? (
-            <ActivityPreview pub={pub} />
-          ) : (
-            <p class="muted">
-              Nothing.{' '}
-              {publisher.gateReason
-                ? `Hidden: ${publisher.gateReason}.`
-                : cand && !connected()
-                  ? `Would show "${cand.activity.title}" from ${cand.sourceId} once connected.`
-                  : 'No source is playing anything.'}
-            </p>
-          )}
-          {publisher.lastError && <Notice kind="error">Last error: {publisher.lastError}</Notice>}
-          {config.onlyWhenOnline && connected() && <SessionsView gateway={gateway} />}
-        </div>
-      );
+      const candidate = publisher.candidate();
+      return <>
+        <section class="card flush">
+          <div class="card-header"><h2>Now showing</h2>{pub && <span class="small muted">sent {timeAgo(pub.sentAt)}</span>}</div>
+          <div class="card-body">
+            {pub ? <ActivityPreview pub={pub} /> : <p class="muted">{publisher.gateReason ? `Hidden: ${publisher.gateReason}.` : candidate && !connected() ? `Will show “${candidate.activity.title}” once connected.` : 'No source is playing anything.'}</p>}
+            {publisher.lastError && <Notice kind="error">Last error: {publisher.lastError}</Notice>}
+          </div>
+        </section>
+        <section class="card flush">
+          <div class="card-header"><h2>Connection</h2></div>
+          <div class="card-body">{config.onlyWhenOnline && connected() ? <SessionsView gateway={gateway} /> : <dl class="detail-list"><dt>Discord account</dt><dd>{connected() ? 'Connected' : 'Not connected'}</dd><dt>Understudy’s session</dt><dd>{headless.active ? 'Online, with activity' : 'Inactive'}</dd><dt>Mode</dt><dd>Show even when Discord is closed</dd></dl>}</div>
+        </section>
+      </>;
     },
   };
 }
@@ -455,40 +365,13 @@ function createDiscord(ctx: OutputContext<Config>) {
 function SessionsView({ gateway }: { gateway: DiscordGateway }) {
   const own = gateway.ownSessionIds;
   const real = realSessions(gateway.sessions, own);
-  const role = (s: GatewaySession) =>
-    s.session_id === gateway.sessionId
-      ? 'this app (Gateway)'
-      : own.has(s.session_id)
-        ? 'this app (earlier connection)'
-        : s.session_id.startsWith('h:')
-          ? 'this app (headless)'
-          : s.session_id === 'all'
-            ? 'combined'
-            : 'client';
-  const label = { connecting: 'connecting', ready: 'connected', reconnecting: 'reconnecting', stopped: 'stopped', failed: 'failed' }[gateway.state];
-  return (
-    <details style="margin-top: .75rem">
-      <summary class="small">
-        Your Discord clients: {gateway.informed ? (real.length ? real.map((s) => s.status).join(', ') : 'none') : 'unknown'} · Gateway {label}
-        {gateway.presence && ` · ours: ${gateway.presence.status}${gateway.presence.activities.length ? ' with activity' : ''}`}
-      </summary>
-      {gateway.lastError && gateway.state !== 'ready' && <p class="small muted">{gateway.lastError}</p>}
-      {gateway.sessions.length > 0 && (
-        <table class="small">
-          <tbody>
-            {gateway.sessions.map((s) => (
-              <tr>
-                <td>{role(s)}</td>
-                <td>{[s.client_info?.client, s.client_info?.os].filter(Boolean).join(' / ')}</td>
-                <td>{s.status}</td>
-                <td class="muted">{(s.activities ?? []).map((a) => a.name).join(', ')}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </details>
-  );
+  const role = (session: GatewaySession) => session.session_id === gateway.sessionId ? 'Understudy (Gateway)' : own.has(session.session_id) ? 'Understudy (previous)' : session.session_id.startsWith('h:') ? 'Understudy (headless)' : session.session_id === 'all' ? 'Combined' : 'Your client';
+  const state = { connecting: 'Connecting', ready: 'Connected', reconnecting: 'Reconnecting', stopped: 'Stopped', failed: 'Failed' }[gateway.state];
+  return <>
+    <dl class="detail-list"><dt>Your clients</dt><dd>{gateway.informed ? real.length ? real.map((session) => `${session.status} · ${session.client_info?.client ?? 'client'}`).join(', ') : 'Offline' : 'Checking…'}</dd><dt>Understudy’s session</dt><dd>{gateway.presence ? `${gateway.presence.status}${gateway.presence.activities.length ? ', with activity' : ''}` : 'Inactive'}</dd><dt>Gateway</dt><dd>{state}</dd></dl>
+    {gateway.lastError && gateway.state !== 'ready' && <p class="help field-error">{gateway.lastError}</p>}
+    {!!gateway.sessions.length && <details class="session-details"><summary class="small">All connections</summary><div class="table-scroll"><table class="small"><tbody>{gateway.sessions.map((session) => <tr><td>{role(session)}</td><td>{[session.client_info?.client, session.client_info?.os].filter(Boolean).join(' / ')}</td><td>{session.status}</td></tr>)}</tbody></table></div></details>}
+  </>;
 }
 
 function ActivityPreview({ pub }: { pub: PublishedState }) {
@@ -496,10 +379,10 @@ function ActivityPreview({ pub }: { pub: PublishedState }) {
   const verb = { 0: 'Playing', 2: 'Listening to', 3: 'Watching' }[d.type];
   return (
     <div>
-      <div class="preview">
-        {d.assets?.large_image && <img src={d.assets.large_image} alt={d.assets.large_text ?? ''} />}
+      <div class="activity-preview">
+        <div class="activity-art">{d.assets?.large_image ? <img src={d.assets.large_image} alt={d.assets.large_text ?? ''} /> : <Icon name={d.type === 2 ? 'music' : 'monitor'} size={28} />}</div>
         <div>
-          <div class="small muted">
+          <div class="small activity-kind">
             {verb} {d.name}
           </div>
           {d.details && <div><strong>{d.details}</strong></div>}
@@ -510,7 +393,7 @@ function ActivityPreview({ pub }: { pub: PublishedState }) {
         </div>
       </div>
       <p class="small muted">
-        From <code>{pub.sourceId}</code>, last sent {timeAgo(pub.sentAt)}.
+        From <code>{pub.sourceId}</code>.
       </p>
       <details>
         <summary class="small">Payload</summary>
@@ -523,7 +406,7 @@ function ActivityPreview({ pub }: { pub: PublishedState }) {
 export const discordPlugin = defineOutput({
   id: 'discord',
   name: 'Discord',
-  description: 'Shows the highest-priority activity as your Discord presence, via a headless session.',
+  description: 'Shows the Hub’s selected activity as your Discord presence.',
   configSchema,
   create: createDiscord,
 });

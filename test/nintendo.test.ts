@@ -224,7 +224,7 @@ describe('nintendo plugin', () => {
 
     await t.post('/plugins/nintendo/friend', { nsaId: 'main-nsa' });
     expect(t.hub.get('nintendo')?.activity).toMatchObject({ title: 'Splatoon 3', name: 'Nintendo Switch 2' });
-    expect(t.status()).toEqual({ health: 'ok', message: 'Tsuni is playing Splatoon 3' });
+    expect(t.status()).toEqual({ health: 'ok', message: 'Tsuni is playing Splatoon 3', lastSuccessAt: expect.any(Number) });
 
     // A rejected session token signs out instead of retrying.
     t.backend.failWith = new NintendoAuthError('Nintendo no longer accepts this sign-in; sign in again.', true);
@@ -258,7 +258,7 @@ describe('nintendo plugin', () => {
     t.backend.failWith = new NintendoError('Network error: connect ECONNREFUSED', { kind: 'backoff' });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(t.fetches()).toBe(1);
-    expect(t.status()).toEqual({ health: 'error', message: 'Network error: connect ECONNREFUSED' });
+    expect(t.status()).toMatchObject({ health: 'error', message: 'Network error: connect ECONNREFUSED' });
     await vi.advanceTimersByTimeAsync(119_000);
     expect(t.fetches()).toBe(1);
     t.backend.failWith = new NintendoError('nxapi-znca-api error: rate_limit', { kind: 'after', ms: 5_000 });

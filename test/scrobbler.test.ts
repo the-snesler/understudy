@@ -330,7 +330,7 @@ describe('scrobbler plugin', () => {
     });
     const t = await boot(fetch.impl, { username: 'tsuni', apiKey: 'k', smallImage: 'lastfm' });
     await vi.advanceTimersByTimeAsync(0);
-    expect(t.status()).toEqual({ health: 'idle', message: 'Nothing playing' });
+    expect(t.status()).toEqual({ health: 'idle', message: 'Nothing playing', lastSuccessAt: Date.now() });
 
     playing = [lastfmPlaying, lastfmScrobbled];
     await vi.advanceTimersByTimeAsync(15_000);
@@ -348,7 +348,7 @@ describe('scrobbler plugin', () => {
       endsAt: seenAt + 240_000,
       links: [{ label: 'Last.fm', url: 'https://www.last.fm/music/Aphex+Twin/_/Windowlicker' }],
     });
-    expect(t.status()).toEqual({ health: 'ok', message: 'Playing Windowlicker by Aphex Twin' });
+    expect(t.status()).toEqual({ health: 'ok', message: 'Playing Windowlicker by Aphex Twin', lastSuccessAt: Date.now() });
 
     // Still reported on later polls: the same start.
     await vi.advanceTimersByTimeAsync(60_000);
@@ -377,7 +377,7 @@ describe('scrobbler plugin', () => {
     });
     // Already playing when we started: no progress bar.
     expect(t.activity()?.endsAt).toBeUndefined();
-    expect(t.status()).toEqual({ health: 'ok', message: 'Playing Shelter by Porter Robinson & Madeon (Plexamp)' });
+    expect(t.status()).toEqual({ health: 'ok', message: 'Playing Shelter by Porter Robinson & Madeon (Plexamp)', lastSuccessAt: expect.any(Number) });
     const live = await t.live();
     expect(live).toContain('Plexamp');
     expect(live).toContain('3:39');
@@ -396,10 +396,11 @@ describe('scrobbler plugin', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(t.activity()).toBeDefined();
     const polls = () => fetch.calls.filter((c) => c.url.searchParams.get('method') === 'user.getrecenttracks').length;
+    const lastSuccessAt = t.status().lastSuccessAt;
 
     limited = true;
     await vi.advanceTimersByTimeAsync(10_000); // fails; next try in 20 s
-    expect(t.status()).toEqual({ health: 'error', message: 'Last.fm rate limit exceeded' });
+    expect(t.status()).toEqual({ health: 'error', message: 'Last.fm rate limit exceeded', lastSuccessAt });
     expect(t.activity()).toBeDefined();
     await vi.advanceTimersByTimeAsync(19_000);
     expect(polls()).toBe(2);

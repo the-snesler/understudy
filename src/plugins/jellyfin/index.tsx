@@ -164,6 +164,7 @@ function createJellyfin(ctx: SourceContext<Config>) {
     if (ctx.signal.aborted) return;
     last = result;
     published = result.activity;
+    ctx.reportSuccess?.();
     ctx.publish(result.activity ?? null);
   }
 
@@ -215,6 +216,7 @@ function createJellyfin(ctx: SourceContext<Config>) {
         if (!configured) return c.redirect(`${back}?error=${encodeURIComponent('Set the URL and API key first.')}`);
         try {
           const sessions = await client.sessions();
+          ctx.reportSuccess?.();
           const playing = sessions.filter(isPlaying).length;
           return c.redirect(`${back}?message=${encodeURIComponent(`Connected to ${server}: ${sessions.length} session(s), ${playing} playing.`)}`);
         } catch (err) {

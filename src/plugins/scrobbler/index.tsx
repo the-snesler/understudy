@@ -146,6 +146,7 @@ export function createScrobblerPlugin(fetchImpl: typeof fetch = fetch) {
       }
       if (ctx.signal.aborted) return;
       last = result;
+      ctx.reportSuccess?.();
       ctx.publish(result.activity ?? null);
     }
 
@@ -202,6 +203,7 @@ export function createScrobblerPlugin(fetchImpl: typeof fetch = fetch) {
               if (!t.valid) return fail('ListenBrainz rejected the token.');
             }
             const track = await client.nowPlaying();
+            ctx.reportSuccess?.();
             const now = track ? `now playing ${describe(track)}` : 'nothing playing right now';
             return c.redirect(`${back}?message=${encodeURIComponent(`Connected to ${service}: ${now}.`)}`);
           } catch (err) {

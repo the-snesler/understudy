@@ -200,6 +200,7 @@ export function createTraktPlugin(fetchImpl?: typeof fetch) {
       }
       if (ctx.signal.aborted) return;
       last = result;
+      ctx.reportSuccess?.();
       ctx.publish(result.activity ?? null);
     }
 
@@ -330,6 +331,7 @@ export function createTraktPlugin(fetchImpl?: typeof fetch) {
           if (!config.clientId || !user) return c.redirect(fail('Set the client ID and a username (or connect your account) first.'));
           try {
             const watching = await client.watching(user, await accessToken());
+            ctx.reportSuccess?.();
             const item = watching && (imageText(watching) ?? 'something');
             return c.redirect(`${back}?message=${encodeURIComponent(`Connected to Trakt: ${item ? `watching ${item}` : 'nothing playing right now'}.`)}`);
           } catch (err) {

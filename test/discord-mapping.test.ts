@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { toDiscordActivity } from '../src/plugins/discord/mapping.js';
-import { pick, type PublisherConfig } from '../src/plugins/discord/publisher.js';
 import { movie } from './helpers.js';
 
 const opts = { applicationId: '1557839419422285984' };
@@ -68,42 +67,5 @@ describe('toDiscordActivity', () => {
     expect(a.assets).toBeUndefined();
     expect(a.buttons?.map((b) => b.url)).toEqual(['https://a.example', 'https://b.example']);
     expect(a.buttons?.[0]?.label).toHaveLength(32);
-  });
-});
-
-describe('pick', () => {
-  const config: PublisherConfig = {
-    applicationId: '1',
-    sourcePriority: ['plex', 'switch'],
-    paused: 'last',
-    refreshMinutes: 5,
-  };
-  const sources = ['plex', 'switch', 'other'].map((id) => ({ id, label: id, enabled: true }));
-  const entry = (sourceId: string, changedAt: number, paused = false) => ({
-    sourceId,
-    changedAt,
-    activity: movie({ key: sourceId, paused }),
-  });
-
-  it('follows the priority list, then recency', () => {
-    const state = { activities: [entry('other', 300), entry('switch', 200), entry('plex', 100)] };
-    expect(pick(state, config, sources)?.sourceId).toBe('plex');
-    expect(pick({ activities: [entry('other', 300), entry('switch', 200)] }, config, sources)?.sourceId).toBe('switch');
-    expect(pick(state, { ...config, sourcePriority: [] }, sources)?.sourceId).toBe('other');
-  });
-
-  it('hides, ranks last, or shows paused activities', () => {
-    const state = { activities: [entry('plex', 100, true), entry('switch', 50)] };
-    expect(pick(state, config, sources)?.sourceId).toBe('switch');
-    expect(pick(state, { ...config, paused: 'show' }, sources)?.sourceId).toBe('plex');
-    expect(pick(state, { ...config, paused: 'hide' }, sources)?.sourceId).toBe('switch');
-    const onlyPaused = { activities: [entry('plex', 100, true)] };
-    expect(pick(onlyPaused, config, sources)?.sourceId).toBe('plex');
-    expect(pick(onlyPaused, { ...config, paused: 'hide' }, sources)).toBeNull();
-  });
-
-  it('ignores disabled sources', () => {
-    const state = { activities: [entry('plex', 100)] };
-    expect(pick(state, config, [{ id: 'plex', label: 'plex', enabled: false }])).toBeNull();
   });
 });

@@ -241,7 +241,7 @@ describe('steam plugin', () => {
       largeImage: { url: HEADER, text: 'Hades' },
       links: [{ label: 'View on Steam', url: 'https://store.steampowered.com/app/1145360/' }],
     });
-    expect(t.status()).toEqual({ health: 'ok', message: 'Tsuni is playing Hades' });
+    expect(t.status()).toEqual({ health: 'ok', message: 'Tsuni is playing Hades', lastSuccessAt: expect.any(Number) });
     const started = t.activity()!.startedAt;
 
     await vi.advanceTimersByTimeAsync(90_000);
@@ -260,7 +260,7 @@ describe('steam plugin', () => {
     t.steam.s.player = player();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(t.activity()).toBeUndefined();
-    expect(t.status()).toEqual({ health: 'idle', message: "Tsuni isn't playing anything." });
+    expect(t.status()).toEqual({ health: 'idle', message: "Tsuni isn't playing anything.", lastSuccessAt: Date.now() });
     await flushState();
   });
 
@@ -312,7 +312,7 @@ describe('steam plugin', () => {
     fake();
     const t = await boot({ ...configured, ignore: ['hades'] });
     expect(t.activity()).toBeUndefined();
-    expect(t.status()).toEqual({ health: 'idle', message: 'Tsuni is playing Hades (ignored)' });
+    expect(t.status()).toEqual({ health: 'idle', message: 'Tsuni is playing Hades (ignored)', lastSuccessAt: expect.any(Number) });
     expect(t.count('appdetails 1145360')).toBe(0);
     await flushState();
   });

@@ -155,6 +155,7 @@ export function createSteamPlugin(fetchImpl?: typeof fetch) {
         void write({ session: undefined });
       }
       last = result;
+      ctx.reportSuccess?.();
       ctx.publish(result.activity ?? null);
     }
 
@@ -205,6 +206,7 @@ export function createSteamPlugin(fetchImpl?: typeof fetch) {
           if (!configured) return c.redirect(`${back}?error=${encodeURIComponent('Set the API key and Steam profile first.')}`);
           try {
             const player = await client.summary(await resolveId());
+            ctx.reportSuccess?.();
             const game = currentGame(player);
             const msg = `Connected to Steam as ${player.personaname ?? player.steamid}${game ? `, playing ${game.name ?? game.gameId}` : ''}.${hiddenHint(player)}`;
             return c.redirect(`${back}?message=${encodeURIComponent(msg)}`);

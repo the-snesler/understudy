@@ -138,6 +138,7 @@ export function createNintendoPlugin(makeBackend: (cfg: Config, dataDir?: string
       fetching ??= conn
         .friends()
         .then((list) => {
+          ctx.reportSuccess?.();
           setFriends(list);
           return list;
         })
@@ -279,6 +280,7 @@ export function createNintendoPlugin(makeBackend: (cfg: Config, dataDir?: string
             await write({ sessionToken: result.sessionToken, auth: result.auth, account: result.accountName, pending: undefined });
             connection = undefined;
             lastError = undefined;
+            ctx.reportSuccess?.();
             setFriends(result.friends);
             log.info(`Signed in to Nintendo Switch Online as ${result.accountName}`);
             restartPolling();
