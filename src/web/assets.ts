@@ -13,7 +13,7 @@ export function registerAssets(app: Hono): void {
       const asset = new URL(`../../assets/${file}`, import.meta.url);
       if (!fs.existsSync(asset)) return c.text('Build UI assets first: pnpm build:ui', 503);
       c.header('Content-Type', `${type}${type?.startsWith('text/') ? '; charset=utf-8' : ''}`);
-      c.header('Cache-Control', 'public, max-age=3600');
+      c.header('Cache-Control', file?.endsWith('.woff2') ? 'public, max-age=3600' : 'public, max-age=0, must-revalidate');
       return c.body(fs.readFileSync(asset));
     });
   }

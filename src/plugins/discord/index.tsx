@@ -355,7 +355,7 @@ function createDiscord(ctx: OutputContext<Config>) {
         </section>
         <section class="card flush">
           <div class="card-header"><h2>Connection</h2></div>
-          <div class="card-body">{config.onlyWhenOnline && connected() ? <SessionsView gateway={gateway} /> : <dl class="detail-list"><dt>Discord account</dt><dd>{connected() ? 'Connected' : 'Not connected'}</dd><dt>Understudy’s session</dt><dd>{headless.active ? 'Online, with activity' : 'Inactive'}</dd><dt>Mode</dt><dd>Show even when Discord is closed</dd></dl>}</div>
+          <div class="card-body">{config.onlyWhenOnline && connected() ? <SessionsView gateway={gateway} /> : <dl class="detail-list"><dt>Discord account</dt><dd>{connected() ? 'Connected' : 'Not connected'}</dd><dt>Understudy’s session</dt><dd>{headless.active ? 'Online, with activity' : 'Inactive'}</dd><dt>Mode</dt><dd>{config.onlyWhenOnline ? 'Only while you’re on Discord' : 'Show even when Discord is closed'}</dd></dl>}</div>
         </section>
       </>;
     },

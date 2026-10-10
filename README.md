@@ -2,13 +2,12 @@
 
 # Understudy
 
-Understudy performs your Discord presence when your own client can't. It's a small self-hosted
-server that watches what you're doing elsewhere and shows it on your Discord profile:
+Understudy connects activity sources to outputs. It watches what you’re doing across services,
+chooses your current activity, and keeps a private history on your server. Its Discord output shows:
 - "Watching Plex" (or Jellyfin, Emby, Trakt), with the poster and a progress bar;
 - "Listening to Plex" (or Last.fm, ListenBrainz), with album art;
 - "Playing Nintendo Switch" or "Playing Steam", with the game.
 
-<img width="2826" height="2116" alt="image" src="https://github.com/user-attachments/assets/9480dda1-10dc-4b36-897f-82481be4acbb" />
 <img width="299" height="408" alt="image" src="https://github.com/user-attachments/assets/fdf98ce1-830b-41c6-9e23-85fe76a8c144" />
 
 It doesn't need the Discord desktop app on the machine doing the playing.
@@ -25,8 +24,9 @@ It doesn't need the Discord desktop app on the machine doing the playing.
   - **Manual**: set an activity from the web UI.
 - **Output: Discord.**
   - Only while you're actually on Discord, with your real status.
-  - Paused media is hidden.
-  - Priority between sources, quiet hours, and a pause switch with an HTTP API.
+  - Uses the Hub’s selected activity, with optional rules for this output.
+- **Hub:** source priority, paused-media rules, quiet hours, and publishing pause controls.
+- **History:** persistent source and displayed segments, daily totals, and calendar/JSON feeds.
 - **Web UI** for setup, sign-ins and live status. Settings live in `/data`.
 
 Sources and outputs are plugins, so more can be added (see [Architecture](#architecture)).
@@ -38,21 +38,24 @@ cp compose.example.yml compose.yml   # set UI_PASSWORD
 docker compose up -d --build
 ```
 
-Then open <http://localhost:8080>. For development:
+Then open <http://localhost:8080>. For development, use Node **22.13 or newer** (history uses built-in `node:sqlite`):
 
 ```sh
 pnpm install
-pnpm dev        # http://localhost:8080, data in ./data
+pnpm dev        # builds UI assets; http://localhost:8080, data in ./data
+pnpm dev:css    # optional second terminal: rebuild CSS as JSX/styles change
 pnpm test
+pnpm typecheck
+pnpm build
 ```
 
 | Env var | Default | |
 |---|---|---|
 | `PORT` | `8080` | |
-| `DATA_DIR` | `./data` (`/data` in Docker) | `config.json` (settings) and `state.json` (tokens). Both are mode 600. |
+| `DATA_DIR` | `./data` (`/data` in Docker) | `config.json` (settings), `state.json` (tokens), and `history.sqlite` (activity and feed access). All are mode 600. |
 | `UI_PASSWORD` | unset | Password for the web UI's sign-in page (and the JSON API). Set it: the UI holds your Discord tokens. Changing it signs everyone out. |
 | `PUBLIC_URL` | request origin | The URL you open the UI at, if that differs from what the server sees (e.g. behind a reverse proxy). Used for the OAuth redirect URI, and, if it's public HTTPS, for the optional artwork proxy. |
-| `TZ` | system zone | Default time zone for quiet hours (e.g. `America/Chicago`). Each Discord output can override it. |
+| `TZ` | system zone | Default Hub time zone for quiet hours and daily totals (e.g. `America/Chicago`). Set it in Settings → Hub rules; outputs can override their schedule. |
 | `NXAPI_AUTH_CLIENT_ID` | unset | Default nxapi-auth client ID for the Nintendo Switch source. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
 
@@ -70,10 +73,10 @@ If the redirect page can't load (e.g. you registered `localhost` but opened the 
 machine), copy the URL from the address bar and paste it into "Redirect page didn't load?".
 
 Things to know:
-- **One activity at a time.** When several sources are active, the Discord output picks one: by
-  its source priority list (source ids, highest first), then the most recent.
-- Paused activities are hidden by default, like Spotify's integration. The Discord settings can
-  rank them last or show them instead.
+- **One activity at a time.** When several sources are active, the Hub picks one using the source
+  order on Overview (drag to reorder, or use Move up/down on the gripper), then the most recent.
+- Paused activities are hidden by default, like Spotify's integration. Settings → Hub rules can
+  rank them last or show them instead. Discord can use its own paused-media and schedule rules.
 - By default the activity is shown only while one of your real Discord clients (desktop, web or
   mobile) is online, idle or dnd ("Only while you are on Discord"). This keeps one extra Discord
   connection open with your login.
@@ -86,14 +89,14 @@ Things to know:
   - Discord doesn't really delete one when asked: it lingers, holding you online with no activity,
     for a few minutes afterwards.
 
-- **Quiet hours** (Discord settings): daily times when nothing is shown, e.g. `23:00-07:00`, in
+- **Quiet hours** (Settings → Hub rules): daily times when nothing is shown, e.g. `23:00-07:00`, in
   the configured time zone.
 
 ## Pausing
 
-The dashboard has a **Pause publishing** switch: 30 minutes, 1 hour, 4 hours, or until you resume.
+The sidebar has **Pause for 1 hour**, with other durations: 30 minutes, 4 hours, or until you resume.
 While paused, the Discord output withdraws the activity. A pause survives restarts and ends by
-itself when timed. To stop a single source or output, use its Disable button instead.
+itself when timed. To stop a single source or output, turn off its Enabled switch.
 
 The same controls are available as a JSON API, using the UI password as HTTP basic auth (any
 username). POST requests must send `Content-Type: application/json`, which keeps them safe from
@@ -204,8 +207,7 @@ Artwork, in order: Last.fm's own image, the Cover Art Archive (when the track ha
 release id), iTunes/Deezer album art (no key needed), then the **fallback image**.
 
 If Plex or Jellyfin music also scrobbles (e.g. Plexamp to Last.fm), both sources report the same
-track. The Discord output shows one of them, by its source priority list; put the one you prefer
-higher.
+track. The Hub selects one using the source order on Overview; put the one you prefer higher.
 
 ## Nintendo Switch setup
 
@@ -285,11 +287,42 @@ URL, e.g. `1145360` from `store.steampowered.com/app/1145360/`), so only games p
 - **`invalid_scope` when connecting Discord.** Enable the Social SDK for your app (see Discord
   setup).
 
+## Activity history and feeds
+
+The Overview follows **Sources → Hub → Outputs**. All source activity is recorded, including
+activity that loses priority or is hidden by paused-media and quiet-hour rules. Outputs call
+`ctx.reportShown(activity | null)` after a successful send or clear; **Displayed** totals count the
+union of those output intervals, so two outputs showing activity do not double-count the time.
+
+Today’s watching, listening, and playing totals sum observed source segment lengths, including
+paused segments, clipped to the local day in the Hub’s time zone. Overlapping sources can add up
+to more than elapsed wall time. The timeline page is a stub; the underlying history is available
+through the feeds:
+
+- `/feed/history.ics?token=…` supplies calendar events with stable UIDs.
+- `/api/history.json?token=…` supplies source and output segments. Optional `from`/`to` query
+  parameters accept ISO dates or epoch milliseconds; `sourceId` filters one source.
+
+Copy complete links from Overview or Settings. These two routes use a secret token instead of
+the UI password, so calendars and scripts can subscribe. **Settings → Regenerate links** revokes
+all earlier links. Anyone with a link can read the history; treat it as a password.
+
+History defaults to **90 days** of retention, adjustable in Settings. A 15-second heartbeat closes
+segments interrupted by a crash at the last observed time on the next start, so downtime is not
+counted. A normal shutdown closes them immediately. Back up the data directory with the service
+stopped. Warn/error logs remain a 500-entry memory buffer; dismissing them persists a timestamp,
+and active instance warnings continue to appear after dismissal.
+
+Existing Discord source priority, paused-media, quiet-hour, and time-zone settings migrate
+automatically to source order and the top-level `hub` configuration. Different legacy schedule
+rules are preserved as output overrides. Reordering and rule-only saves do not restart sources
+or outputs; changes to plugin settings reconnect the affected instance.
+
 ## Architecture
 
 ```
 src/
-  core/        activity model, hub, plugin interfaces, registry, JSON stores, logger
+  core/        activity model, selection hub, plugin interfaces, registry, JSON/SQLite stores, logger
   plugins/     sources and outputs; register new ones in plugins/index.ts
     discord/   OAuth (PKCE), REST client, headless session, activity mapping, publisher
     tautulli/  Plex via Tautulli: polling, filters, templates, artwork (TMDB, iTunes, signed proxy)
@@ -305,7 +338,13 @@ src/
 ```
 
 A **source** calls `ctx.publish(nowPlaying | null)`. An **output** gets `onState(hubState)` with
-every source's current activity. A plugin declares its settings as a zod schema, which also
+`selected` and `selectionReason`, alongside every source’s current activity. An output can call
+`ctx.reportShown(sourceActivity | null)` to record what it has sent, and plugins call
+`ctx.reportSuccess()` after successful polls or connection tests. A plugin declares its settings as a zod schema, which also
 generates its settings form. Plugins can add their own routes (under `/plugins/<instance>/`,
 behind the UI password), public routes (under `/public/<instance>/`, for images and webhooks; they
-must authenticate requests themselves) and UI panels. Each configured instance is restarted when its settings are saved.
+must authenticate requests themselves) and UI panels. A configured instance restarts when its plugin settings change. Form presentation comes from
+schema metadata: `group`, `widget` (`chips`, `segmented`, `template`), `showIf`, `disabledIf`,
+`templateTab`, and `variables`. Tailwind v4 scans all `src/**/*.tsx` files, including plugins; the
+palette is defined in `src/web/styles.css` with `@theme`. Lucide/Simple Icons render SVGs on the
+server, and fonts, htmx, SortableJS, and the small enhancement script are served locally.

@@ -213,8 +213,10 @@
     submitting = true;
   });
   document.addEventListener('htmx:beforeSwap', (event) => {
-    // Keep a dragged row from disappearing during a live refresh.
-    if (event.detail.target?.matches('[data-sorting]') || event.detail.target?.querySelector('[data-sorting]')) event.detail.shouldSwap = false;
+    // Keep active drag, keyboard controls and open menus in place during a live refresh.
+    const target = event.detail.target;
+    if (target?.matches('[data-sorting]') || target?.querySelector('[data-sorting], details[open]') ||
+      (document.activeElement !== document.body && target?.contains(document.activeElement))) event.detail.shouldSwap = false;
   });
   document.addEventListener('htmx:afterSwap', () => init());
   window.addEventListener('beforeunload', (event) => {
