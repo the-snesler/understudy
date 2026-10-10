@@ -431,6 +431,29 @@ describe('tautulli plugin', () => {
     expect(hub.get('tautulli')).toBeUndefined();
   });
 
+  it('previews submitted templates against current streams and remembers players after restart', async () => {
+    let sessions = [movieSession];
+    const server = await fakeTautulli(() => sessions);
+    const { hub, registry } = await boot({ url: server.url, apiKey: 'good-key' });
+    await until(() => !!hub.get('tautulli'));
+    const live = registry.get('tautulli')!.live!;
+    expect(registry.get('tautulli')!.status.lastSuccessAt).toEqual(expect.any(Number));
+    const response = await live.app.request('/plugins/tautulli/template-preview?kind=movie', {
+      method: 'POST', body: new URLSearchParams({ 'cfg.movieTitle': '<b>{title}</b>', 'cfg.movieSubtitle': '[Dir. {director}]' }),
+    });
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain('&lt;b&gt;The Matrix&lt;/b&gt;');
+    expect(html).toContain('Dir. Lana Wachowski');
+    expect(live.instance.formContext?.({ pagePath: '/instances/tautulli', origin: 'http://localhost' }).suggestions?.players).toContain('Living Room TV');
+    sessions = [];
+    await registry.restart('tautulli');
+    await until(() => registry.get('tautulli')?.status.message === 'Nothing playing');
+    expect(registry.get('tautulli')!.live!.instance.formContext?.({ pagePath: '/instances/tautulli', origin: 'http://localhost' }).suggestions?.players).toContain('Living Room TV');
+    const empty = await registry.get('tautulli')!.live!.app.request('/plugins/tautulli/template-preview?kind=movie', { method: 'POST' });
+    expect(await empty.text()).toContain('Start a movie stream');
+  });
+
   it('reports a bad API key', async () => {
     const t = await fakeTautulli(() => []);
     const { registry } = await boot({ url: t.url, apiKey: 'wrong' });
