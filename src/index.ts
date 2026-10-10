@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { serve } from '@hono/node-server';
 import { Hub } from './core/hub.js';
+import { HistoryStore } from './core/history.js';
 import { LogBuffer, Logger, type LogLevel } from './core/log.js';
 import { Controls } from './core/controls.js';
 import { emptyConfig, Registry, type AppConfig } from './core/registry.js';
@@ -21,6 +22,8 @@ const config = new JsonStore<AppConfig>(path.join(dataDir, 'config.json'), empty
 const state = new JsonStore<Record<string, unknown>>(path.join(dataDir, 'state.json'), () => ({}));
 const hub = new Hub();
 const registry = new Registry({ plugins, config, state, hub, log, env: { publicUrl, dataDir } });
+const history = new HistoryStore(path.join(dataDir, 'history.sqlite'), { retentionDays: registry.historyRetention() });
+hub.attachHistory(history);
 
 // Before the instances start, so outputs see a saved pause from the first state they get.
 const controls = new Controls(new ScopedState(state, '_app'), hub, log.child('app'));
@@ -42,7 +45,8 @@ if (env.UI_PASSWORD && !sessionSecret) {
   await authState.set({ sessionSecret });
 }
 
-const app = createWebApp({ registry, hub, logs, env: { publicUrl }, uiPassword: env.UI_PASSWORD || undefined, sessionSecret, controls });
+const preferences = new ScopedState<{ attentionDismissedAt?: number }>(state, '_ui');
+const app = createWebApp({ registry, hub, logs, env: { publicUrl }, uiPassword: env.UI_PASSWORD || undefined, sessionSecret, controls, history, preferences });
 const server = serve({ fetch: app.fetch, port }, (info) => {
   log.info(`Web UI on http://localhost:${info.port} (data in ${dataDir})`);
   if (!env.UI_PASSWORD) log.warn('UI_PASSWORD is not set; anyone who can reach the web UI can change settings.');
@@ -58,6 +62,7 @@ async function shutdown(signal: string) {
   server.close();
   controls.stop();
   await registry.stopAll();
+  history.close();
   process.exit(0);
 }
 process.on('SIGINT', () => void shutdown('SIGINT'));

@@ -5,16 +5,24 @@ import { Hono, type Context } from 'hono';
 import { contextStorage } from 'hono/context-storage';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { csrf } from 'hono/csrf';
-import { describeActivity } from '../core/activity.js';
+import { stableStringify } from '../core/activity.js';
+import type { HistoryStore } from '../core/history.js';
+import { hubRulesSchema, type HubRules } from '../core/hub.js';
+import type { ScopedState } from '../core/store.js';
 import type { Controls } from '../core/controls.js';
 import type { Hub } from '../core/hub.js';
 import type { LogBuffer, LogEntry } from '../core/log.js';
 import type { AppEnv, PanelProps } from '../core/plugin.js';
 import type { InstanceView, Registry } from '../core/registry.js';
 import { Auth, newSessionSecret, SESSION_COOKIE, SESSION_TTL_MS } from './auth.js';
+import { registerAssets } from './assets.js';
 import { issuesByField, parseSettingsForm, SettingsFields } from './forms.js';
 import { APPLE_TOUCH_ICON, ICON } from './icon.js';
-import { Health, Layout, LoginPage, Notice, timeAgo } from './layout.js';
+import { Health, Layout, LoginPage, Notice, PublishingCard, timeAgo } from './layout.js';
+import { Dashboard, FeedsCard, RecentEvents, ToggleForm } from './dashboard.js';
+import { Icon, PluginIcon } from './icons.js';
+import { registerHistoryRoutes } from './history.js';
+import { HubSettings, OutputRulesCard, SaveBar } from './settings.js';
 
 const require = createRequire(import.meta.url);
 const HTMX = fs.readFileSync(require.resolve('htmx.org/dist/htmx.min.js'), 'utf8');
@@ -39,6 +47,8 @@ export interface WebOptions {
   sessionSecret?: string;
   /** App-wide controls (pause). Optional so tests can omit it. */
   controls?: Controls;
+  history?: HistoryStore;
+  preferences?: ScopedState<{ attentionDismissedAt?: number }>;
 }
 
 /**
@@ -68,8 +78,16 @@ export function createWebApp(opts: WebOptions): Hono {
   const app = new Hono();
   // Lets the layout see whether the request is signed in.
   app.use('*', contextStorage());
+  registerAssets(app);
+  app.use('*', async (c, next) => {
+    c.set('pauseInfo', opts.controls?.pauseInfo());
+    c.set('hasControls', !!opts.controls);
+    await next();
+  });
 
   const origin = (c: Context) => env.publicUrl ?? new URL(c.req.url).origin;
+  if (opts.history) registerHistoryRoutes(app, opts.history, { timeZone: () => registry.hubRules().timeZone });
+  let dismissedAt = opts.preferences?.get()?.attentionDismissedAt ?? 0;
 
   app.get('/healthz', (c) => c.json({ ok: true }));
   app.get('/static/htmx.min.js', (c) => {
@@ -183,91 +201,64 @@ export function createWebApp(opts: WebOptions): Hono {
   });
   app.use('*', csrf());
 
-  // ---- dashboard -------------------------------------------------------------------------------
-  const Dashboard = () => {
-    const views = registry.list();
-    const sources = views.filter((v) => v.plugin?.kind === 'source');
-    const outputs = views.filter((v) => v.plugin?.kind === 'output');
-    const pause = opts.controls?.pauseInfo();
-    return (
-      <div hx-get="/partials/dashboard" hx-trigger="every 3s" hx-swap="outerHTML">
-        {opts.controls && (
-          <div class={`card ${pause?.paused ? 'paused' : ''}`}>
-            {pause?.paused ? (
-              <form class="actions" style="margin: 0" method="post" action="/resume">
-                <strong>Publishing is paused</strong>
-                <span class="muted">{pause.until ? `until ${new Date(pause.until).toLocaleString()}` : 'until you resume'}</span>
-                <button>Resume</button>
-              </form>
-            ) : (
-              <form class="actions" style="margin: 0" method="post" action="/pause">
-                <span>Pause publishing:</span>
-                {PAUSE_OPTIONS.map(([label, minutes]) => (
-                  <button class="secondary" name="minutes" value={minutes === undefined ? '' : String(minutes)}>
-                    {label}
-                  </button>
-                ))}
-              </form>
-            )}
-          </div>
-        )}
-        <div class="card">
-          <h2>Sources</h2>
-          <InstanceTable views={sources} activity={(v) => hub.get(v.config.id)?.activity} />
-        </div>
-        <div class="card">
-          <h2>Outputs</h2>
-          <InstanceTable views={outputs} />
-        </div>
-        <div class="card">
-          <h2>Recent log</h2>
-          <LogTable entries={logs.recent(12)} />
-          <p class="small">
-            <a href="/log">Full log</a>
-          </p>
-        </div>
-      </div>
-    );
-  };
-
-  app.get('/', (c) => {
-    const addable = registry
-      .plugins()
-      .filter((p) => p.multiple || !registry.list().some((v) => v.config.plugin === p.id));
-    return c.html(
-      <Layout title="Dashboard">
-        <h1>Dashboard</h1>
-        <Dashboard />
-        {addable.length > 0 && (
-          <form class="card" method="post" action="/instances">
-            <h2>Add</h2>
-            <select name="plugin">
-              {addable.map((p) => (
-                <option value={p.id}>
-                  {p.kind === 'source' ? 'Source' : 'Output'}: {p.name} ({p.description})
-                </option>
-              ))}
-            </select>
-            <div class="actions">
-              <button>Add</button>
-            </div>
-          </form>
-        )}
-      </Layout>,
-    );
+  // ---- overview and app settings ------------------------------------------------------------
+  const dashboard = (c: Context) => <Dashboard registry={registry} hub={hub} logs={logs} history={opts.history} origin={origin(c)} dismissedAt={dismissedAt} />;
+  app.get('/', (c) => c.html(<Layout title="Overview">{dashboard(c)}</Layout>));
+  app.get('/partials/dashboard', (c) => c.html(dashboard(c)));
+  app.get('/partials/publishing', (c) => c.html(<PublishingCard pause={opts.controls?.pauseInfo()} available={!!opts.controls} />));
+  app.post('/attention/dismiss', async (c) => {
+    const form = await c.req.parseBody();
+    const at = Number(form.through);
+    if (!Number.isFinite(at) || at < 0) return c.text('Invalid dismissal timestamp', 400);
+    dismissedAt = Math.max(dismissedAt, Math.min(at, Date.now()));
+    await opts.preferences?.set({ ...opts.preferences.get(), attentionDismissedAt: dismissedAt });
+    return c.redirect('/');
   });
-  app.get('/partials/dashboard', (c) => c.html(<Dashboard />));
-
-  app.get('/log', (c) =>
-    c.html(
-      <Layout title="Log">
-        <h1>Log</h1>
-        <div class="card">
-          <LogTable entries={logs.recent(500)} />
-        </div>
-      </Layout>,
-    ),
-  );
+  app.get('/timeline', (c) => c.html(<Layout title="Timeline"><div class="page-header"><h1>Timeline</h1></div><section class="card stub"><Icon name="activity" size={36} /><h2>Your activity, over time</h2><p class="muted">Activity history is being recorded. The timeline view is coming next. Today’s totals and history feeds are available on the Overview.</p><a class="btn" href="/">Back to Overview</a></section></Layout>));
+  app.get('/settings', (c) => c.html(<Layout title="Settings"><div class="page-header"><h1>Settings</h1></div>{c.req.query('notice') && <Notice kind="ok">{c.req.query('notice') === 'regenerated' ? 'New feed links created. Previous links no longer work.' : 'Settings saved.'}</Notice>}<div class="plugin-grid"><div><section class="card"><div class="flex items-center gap-3 mb-3"><span class="hub-icon"><Icon name="hub" size={18} /></span><h2>Hub rules</h2></div><p class="muted small">Choose how paused media and quiet hours affect your activity.</p><a class="btn mt-4" href="/settings/hub">Edit Hub rules</a></section><form class="card" action="/settings/history" method="post"><h2>History retention</h2><p class="muted small mt-1">Activity stays on this server. Older completed segments are deleted automatically.</p><label class="mt-4" for="retention">Keep history for (days)</label><input id="retention" name="retentionDays" type="number" min="1" max="3650" value={registry.historyRetention()} required /><button class="btn primary mt-4">Save retention</button></form>{opts.history && <section class="card"><h2>Feed access</h2><p class="muted small mt-1">Anyone with a feed link can read your history. Regenerating links revokes the old ones.</p><form method="post" action="/settings/feeds/regenerate" class="mt-4"><button class="btn"><Icon name="restart" size={15} />Regenerate links</button></form></section>}</div><aside class="aside-column"><FeedsCard history={opts.history} origin={origin(c)} /></aside></div></Layout>));
+  const hubSettings = (c: Context, extra?: { errors?: Record<string, string>; values?: Record<string, unknown> }) => c.html(<Layout title="Hub rules"><div class="breadcrumb"><a href="/settings">Settings</a><span>/</span><span>Hub rules</span></div><div class="page-header"><h1>Hub rules</h1></div>{c.req.query('notice') && <Notice kind="ok">Rules saved.</Notice>}{extra?.errors && <Notice kind="error">Some rules are invalid; see below.</Notice>}<div class="max-w-3xl"><HubSettings registry={registry} {...extra} /></div></Layout>);
+  app.get('/settings/hub', (c) => hubSettings(c));
+  app.post('/settings/hub', async (c) => {
+    const form = await c.req.parseBody({ all: true });
+    const raw = parseSettingsForm(hubRulesSchema, form, registry.hubRules());
+    const result = await registry.saveHubRules(raw);
+    if (!result.ok) return hubSettings(c, { errors: issuesByField(result.issues), values: raw });
+    return c.redirect('/settings/hub?notice=saved');
+  });
+  app.post('/settings/history', async (c) => {
+    const days = Number((await c.req.parseBody()).retentionDays);
+    if (!Number.isInteger(days) || days < 1 || days > 3650) return c.text('Retention must be between 1 and 3650 days', 400);
+    await registry.saveHistoryRetention(days);
+    opts.history?.setRetention(days);
+    return c.redirect('/settings?notice=saved');
+  });
+  app.post('/settings/feeds/regenerate', (c) => {
+    if (!opts.history) return c.text('History is not available', 501);
+    opts.history.regenerateToken();
+    return c.redirect('/settings?notice=regenerated');
+  });
+  app.get('/log', (c) => c.html(<Layout title="Log"><div class="page-header"><h1>Log</h1><span class="small muted">Recent events from every source and output</span></div><div class="card log-table-wrapper"><LogTable entries={logs.recent(500)} /></div></Layout>));
+  app.get('/instances/new', (c) => {
+    const kind = c.req.query('kind') === 'output' ? 'output' : 'source';
+    const addable = registry.plugins().filter((p) => p.kind === kind && (p.multiple || !registry.list().some((v) => v.config.plugin === p.id)));
+    return c.html(<Layout title={`Add ${kind}`}><div class="breadcrumb"><a href="/">Overview</a><span>/</span><span>Add {kind}</span></div><div class="page-header"><h1>Add {kind}</h1></div><div class="max-w-2xl">{addable.length ? addable.map((plugin) => <form class="card flex items-center gap-4" method="post" action="/instances"><PluginIcon plugin={plugin.id} /><div class="flex-1"><h2>{plugin.name}</h2><p class="muted small mt-1">{plugin.description}</p></div><button class="btn" name="plugin" value={plugin.id}><Icon name="plus" size={15} />Add</button></form>) : <section class="card"><p class="muted">All available {kind}s have been added.</p><a href="/">Back to Overview</a></section>}</div></Layout>);
+  });
+  app.post('/instances/reorder', async (c) => {
+    try {
+      const input = (c.req.header('content-type') ?? '').startsWith('application/json') ? await c.req.json() : await c.req.parseBody();
+      if (Array.isArray(input.ids)) {
+        const current = registry.sources().map((source) => source.id);
+        const ids = input.ids;
+        if (ids.length !== current.length || new Set(ids).size !== ids.length || ids.some((id: unknown) => typeof id !== 'string' || !current.includes(id))) return c.json({ error: 'Send every source ID exactly once' }, 400);
+        for (let index = 0; index < ids.length; index++) await registry.move(ids[index], index);
+      } else {
+        const index = Number(input.index);
+        if (typeof input.id !== 'string' || !Number.isInteger(index)) return c.json({ error: 'Send a source id and index' }, 400);
+        await registry.move(input.id, index);
+      }
+      return c.json({ ids: registry.sources().map((source) => source.id) });
+    } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+  });
 
   // ---- instances -------------------------------------------------------------------------------
   app.post('/instances', async (c) => {
@@ -286,55 +277,30 @@ export function createWebApp(opts: WebOptions): Hono {
     }
   });
 
-  const instancePage = (c: Context, view: InstanceView, extra?: { errors?: Record<string, string>; values?: Record<string, unknown> }) => {
+  const instancePage = (c: Context, view: InstanceView, extra?: { errors?: Record<string, string>; values?: Record<string, unknown>; rulesValues?: Partial<HubRules> }) => {
     const id = view.config.id;
     const pagePath = `/instances/${id}`;
     const props: PanelProps = { pagePath, origin: origin(c) };
     const notice = NOTICES[c.req.query('notice') ?? ''] ?? c.req.query('message');
     const error = c.req.query('error');
     const plugin = view.plugin;
-    return c.html(
-      <Layout title={view.label}>
-        <h1>
-          {view.label} <span class="muted small">{plugin ? `${plugin.kind} · ${plugin.name}` : view.config.plugin} · id <code>{id}</code></span>
-        </h1>
-        {notice && <Notice kind="ok">{notice}</Notice>}
-        {error && <Notice kind="error">{error}</Notice>}
-        {extra?.errors && <Notice kind="error">Some settings are invalid; see below.</Notice>}
-        <div hx-get={`${pagePath}/live`} hx-trigger="every 3s" hx-swap="innerHTML">
-          <LiveBlock view={view} props={props} />
-        </div>
-        {view.live?.instance.panel?.(props)}
-        {plugin && (
-          <form class="card" method="post" action={`${pagePath}/settings`}>
-            <h2>Settings</h2>
-            <label>
-              Label
-              <div class="help">Display name for this {plugin.kind}.</div>
-              <input type="text" name="label" value={view.config.label ?? ''} placeholder={plugin.name} />
-            </label>
-            <SettingsFields schema={plugin.configSchema} values={extra?.values ?? effectiveConfig(view)} errors={extra?.errors} />
-            <div class="actions">
-              <button>Save{view.config.enabled ? ' and restart' : ''}</button>
-            </div>
-          </form>
-        )}
-        <div class="card actions">
-          <form class="inline" method="post" action={`${pagePath}/${view.config.enabled ? 'disable' : 'enable'}`}>
-            <button class={view.config.enabled ? 'secondary' : ''}>{view.config.enabled ? 'Disable' : 'Enable'}</button>
-          </form>
-          {view.config.enabled && (
-            <form class="inline" method="post" action={`${pagePath}/restart`}>
-              <button class="secondary">Restart</button>
-            </form>
-          )}
-          <form class="inline" method="post" action={`${pagePath}/remove`} onsubmit="return confirm('Remove this instance and its saved state?')">
-            <button class="danger">Remove</button>
-          </form>
-        </div>
-      </Layout>,
-      extra?.errors ? 400 : 200,
-    );
+    const labelField = <div class="field"><label for="instance-label" class="field-label">Label</label><input id="instance-label" type="text" name="label" value={view.config.label ?? ''} placeholder={plugin?.name} /></div>;
+    const labelGroup = plugin?.id === 'tautulli' ? 'Connection' : plugin?.id === 'discord' ? 'Discord application' : 'Settings';
+    const outputRules = plugin?.kind === 'output' ? <OutputRulesCard registry={registry} view={view} values={extra?.rulesValues} error={extra?.errors?._rules} /> : undefined;
+    const saveMessage = plugin?.kind === 'output' ? 'Saving reconnects this output.' : 'Saving restarts this source.';
+    return c.html(<Layout title={view.label}>
+      <div class="breadcrumb"><a href="/">Overview</a><span>/</span><span>{plugin?.kind === 'output' ? 'Outputs' : 'Sources'}</span><span>/</span><span>{view.label}</span></div>
+      <div class="page-header plugin-heading"><div class="plugin-title"><PluginIcon plugin={view.config.plugin} large /><div><div class="plugin-title-line"><h1>{view.label}</h1><span hx-get={`${pagePath}/status`} hx-trigger="every 3s" hx-swap="innerHTML"><Health health={view.status.health} message={view.status.message} pill /></span></div><p>{plugin?.kind === 'output' ? 'Output' : 'Source'} · {plugin?.name ?? view.config.plugin} · <code>{id}</code>{plugin?.kind === 'source' && ` · priority ${registry.sources().findIndex((source) => source.id === id) + 1}`}</p></div></div><div class="actions top">
+        {view.live && (plugin?.id === 'discord' ? <form method="post" action={`${view.routeBase}/resend`}><button class="btn"><Icon name="send" size={15} />Re-send now</button></form> : ['tautulli', 'jellyfin', 'steam', 'scrobbler', 'trakt'].includes(plugin?.id ?? '') && <form method="post" action={`${view.routeBase}/test`}><input name="return" type="hidden" value={pagePath} /><button class="btn"><Icon name="zap" size={15} />Test connection</button></form>)}
+        <form method="post" action={`${pagePath}/restart`}><button class="btn"><Icon name="restart" size={15} />Restart</button></form><div class="btn"><span>Enabled</span><ToggleForm view={view} returnTo={pagePath} /></div><details class="menu"><summary class="btn icon-only" aria-label="More actions"><Icon name="ellipsis" /></summary><div class="menu-popover"><form method="post" action={`${pagePath}/remove`}><button class="btn danger"><Icon name="trash" size={15} />Remove {plugin?.kind ?? 'instance'}</button></form></div></details>
+      </div></div>
+      {notice && <Notice kind="ok">{notice}</Notice>}{error && <Notice kind="error">{error}</Notice>}{extra?.errors && <Notice kind="error">Some settings are invalid; see below.</Notice>}
+      <div class="plugin-grid"><div>{view.live?.instance.panel?.(props)}{plugin && <form class="settings-form" method="post" action={`${pagePath}/settings`} data-save-message={saveMessage}>
+        <SettingsFields schema={plugin.configSchema} values={extra?.values ?? effectiveConfig(view)} errors={extra?.errors} previewUrl={plugin.id === 'tautulli' && view.live ? `${view.routeBase}/template-preview` : undefined} context={view.live?.instance.formContext?.(props)} groupExtras={{ [labelGroup]: labelField }} afterGroups={plugin.id === 'discord' ? { 'When to show': outputRules } : undefined} />
+        {plugin.kind === 'output' && plugin.id !== 'discord' && outputRules}
+        <SaveBar message={saveMessage} />
+      </form>}</div><aside class="aside-column" hx-get={`${pagePath}/live`} hx-trigger="every 3s" hx-swap="innerHTML"><LiveBlock view={view} props={props} entries={logs.recent(6, id)} /></aside></div>
+    </Layout>);
   };
 
   const withView = (handler: (c: Context, view: InstanceView) => Response | Promise<Response>) => (c: Context) => {
@@ -344,9 +310,10 @@ export function createWebApp(opts: WebOptions): Hono {
   };
 
   app.get('/instances/:id', withView((c, view) => instancePage(c, view)));
+  app.get('/instances/:id/status', withView((c, view) => c.html(<Health health={view.status.health} message={view.status.message} pill />)));
   app.get(
     '/instances/:id/live',
-    withView((c, view) => c.html(<LiveBlock view={view} props={{ pagePath: `/instances/${view.config.id}`, origin: origin(c) }} />)),
+    withView((c, view) => c.html(<LiveBlock view={view} props={{ pagePath: `/instances/${view.config.id}`, origin: origin(c) }} entries={logs.recent(6, view.config.id)} />)),
   );
   app.post(
     '/instances/:id/settings',
@@ -355,8 +322,16 @@ export function createWebApp(opts: WebOptions): Hono {
       // `all`: repeated fields (checkbox groups) arrive as arrays.
       const form = await c.req.parseBody({ all: true });
       const raw = parseSettingsForm(view.plugin.configSchema, form, effectiveConfig(view));
-      const result = await registry.saveConfig(view.config.id, raw, String(form.label ?? ''));
-      if (!result.ok) return instancePage(c, view, { errors: issuesByField(result.issues), values: { ...effectiveConfig(view), ...raw } });
+      const rules = form.rulesEnabled === 'on' ? hubRulesSchema.safeParse({ paused: form['rules.paused'], quietHours: form['rules.quietHours'], timeZone: form['rules.timeZone'] }) : undefined;
+      if (rules && !rules.success) return instancePage(c, view, { errors: { _rules: rules.error.issues.map((issue) => issue.message).join('; ') }, values: raw, rulesValues: { paused: String(form['rules.paused']) as HubRules['paused'], quietHours: String(form['rules.quietHours'] ?? ''), timeZone: String(form['rules.timeZone'] ?? '') } });
+      const parsed = view.plugin.configSchema.safeParse(raw);
+      if (!parsed.success) return instancePage(c, view, { errors: issuesByField(parsed.error.issues), values: raw });
+      const label = String(form.label ?? view.config.label ?? '').trim() || undefined;
+      if (stableStringify(parsed.data) !== stableStringify(effectiveConfig(view)) || label !== view.config.label) {
+        const result = await registry.saveConfig(view.config.id, parsed.data as Record<string, unknown>, label ?? '');
+        if (!result.ok) return instancePage(c, view, { errors: issuesByField(result.issues), values: raw });
+      }
+      if (view.plugin.kind === 'output') await registry.saveRules(view.config.id, rules?.success ? rules.data : undefined);
       return c.redirect(`/instances/${view.config.id}?notice=saved`);
     }),
   );
@@ -386,6 +361,8 @@ export function createWebApp(opts: WebOptions): Hono {
   // ---- JSON API, for automations (e.g. Home Assistant). Uses the same password as the UI. ------
   const statusJson = () => ({
     pause: opts.controls?.pauseInfo() ?? { paused: false },
+    selected: hub.snapshot().selected,
+    selectionReason: hub.snapshot().selectionReason,
     instances: registry.list().map((v) => ({
       id: v.config.id,
       kind: v.plugin?.kind,
@@ -394,6 +371,7 @@ export function createWebApp(opts: WebOptions): Hono {
       enabled: v.config.enabled,
       health: v.status.health,
       message: v.status.message,
+      lastSuccessAt: v.status.lastSuccessAt,
       activity: v.plugin?.kind === 'source' ? (hub.get(v.config.id)?.activity ?? null) : undefined,
     })),
   });
@@ -431,55 +409,8 @@ export function createWebApp(opts: WebOptions): Hono {
   return app;
 }
 
-function LiveBlock(props: { view: InstanceView; props: PanelProps }) {
-  const { view } = props;
-  return (
-    <>
-      <div class="card">
-        <Health health={view.status.health} message={view.status.message} />
-      </div>
-      {view.live?.instance.live?.(props.props)}
-    </>
-  );
-}
-
-function InstanceTable(props: { views: InstanceView[]; activity?: (v: InstanceView) => import('../core/activity.js').NowPlaying | undefined }) {
-  if (!props.views.length) return <p class="muted">None yet.</p>;
-  return (
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Status</th>
-          {props.activity && <th>Current activity</th>}
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {props.views.map((v) => {
-          const a = props.activity?.(v);
-          return (
-            <tr>
-              <td>
-                <a href={`/instances/${v.config.id}`}>{v.label}</a>
-                <div class="small muted">{v.config.id}</div>
-              </td>
-              <td>
-                <Health health={v.status.health} message={v.status.message} />
-              </td>
-              {props.activity && <td>{a ? describeActivity(a) : <span class="muted">-</span>}</td>}
-              <td style="text-align: right">
-                <form class="inline" method="post" action={`/instances/${v.config.id}/${v.config.enabled ? 'disable' : 'enable'}`}>
-                  <input type="hidden" name="return" value="/" />
-                  <button class="secondary small">{v.config.enabled ? 'Disable' : 'Enable'}</button>
-                </form>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
+function LiveBlock({ view, props, entries }: { view: InstanceView; props: PanelProps; entries: LogEntry[] }) {
+  return <>{view.live?.instance.live?.(props) ?? <section class="card"><h2>Live status</h2><p class="mt-3"><Health health={view.status.health} message={view.status.message} /></p>{view.status.lastSuccessAt && <p class="muted small">Last success {timeAgo(view.status.lastSuccessAt)}</p>}</section>}<RecentEvents entries={entries} /></>;
 }
 
 function LogTable(props: { entries: LogEntry[] }) {

@@ -212,7 +212,7 @@ describe('web app', () => {
     });
     const app = createWebApp({ registry, hub, logs, env: { publicUrl: undefined }, uiPassword: undefined });
     const page = await (await app.request('/instances/old')).text();
-    expect(page).toMatch(/name="cfg\.on" checked/); // default true, not unticked
+    expect(page).toMatch(/<input[^>]*name="cfg\.on"[^>]*checked/); // default true, not unticked
     expect(page).toContain('value="3"'); // count's default
     expect(page).toContain('value="Saved"');
   });
