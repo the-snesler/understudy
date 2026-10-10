@@ -13,6 +13,7 @@ import { ArtworkResolver, parseGuids, signThumb, verifyThumb } from '../src/plug
 import { TautulliClient, type TautulliSession } from '../src/plugins/tautulli/client.js';
 import { tautulliPlugin } from '../src/plugins/tautulli/index.js';
 import { AlbumArtFinder, normaliseAlbum } from '../src/plugins/shared/album-art.js';
+import { PlexLinks, plexGuidId } from '../src/plugins/tautulli/plex-links.js';
 import { chooseSession, matchesFilter, toNowPlaying } from '../src/plugins/tautulli/session.js';
 import { quietLogger, scriptedFetch } from './helpers.js';
 
@@ -202,6 +203,56 @@ describe('artwork', () => {
 
     const fallback = new ArtworkResolver({ client, log: quietLogger(), albumArt: false, fallback: 'plex', fetchImpl: fetch.impl });
     expect(await fallback.resolve(trackSession)).toMatchObject({ source: 'fallback', url: 'plex' });
+  });
+});
+
+describe('plex links', () => {
+  const provider = (publicPagesURL: string) => ({ status: 200, body: { MediaContainer: { Metadata: [{ publicPagesURL }] } } });
+
+  it('parses plex guids of the expected type only', () => {
+    expect(plexGuidId('plex://track/6a3c1ee412cd6239ad6660f0', 'track')).toBe('6a3c1ee412cd6239ad6660f0');
+    expect(plexGuidId('plex://album/6a3c1ee312cd6239ad665e7a', 'track')).toBeUndefined();
+    expect(plexGuidId('com.plexapp.agents.imdb://tt0133093?lang=en', 'movie')).toBeUndefined();
+    expect(plexGuidId(undefined, 'movie')).toBeUndefined();
+  });
+
+  it('links tracks to Plexamp without any requests', async () => {
+    const fetch = scriptedFetch([]);
+    const links = new PlexLinks(quietLogger(), fetch.impl);
+    expect(await links.resolve({ ...trackSession, guid: 'plex://track/6a3c1ee412cd6239ad6660f0' })).toEqual({
+      label: 'View on Plex',
+      url: 'https://listen.plex.tv/track/6a3c1ee412cd6239ad6660f0',
+    });
+    expect(await new PlexLinks(quietLogger(), fetch.impl).resolve(trackSession)).toBeUndefined();
+  });
+
+  it("links movies to their public page, from Plex's metadata provider", async () => {
+    const fetch = scriptedFetch([provider('https://watch.plex.tv/movie/the-matrix')]);
+    const links = new PlexLinks(quietLogger(), fetch.impl);
+    const s = { ...movieSession, guid: 'plex://movie/5d776825880197001ec967c6' };
+    expect((await links.resolve(s))?.url).toBe('https://watch.plex.tv/movie/the-matrix');
+    expect(fetch.calls[0]?.url).toBe('https://metadata.provider.plex.tv/library/metadata/5d776825880197001ec967c6');
+    // Cached: no more requests.
+    await links.resolve(s);
+    expect(fetch.calls).toHaveLength(1);
+  });
+
+  it("links episodes to the episode page if it exists, else the show's", async () => {
+    const s = { ...episodeSession, grandparent_guid: 'plex://show/5d9c086c46115600200aa2fe', parent_media_index: '2', media_index: '3' };
+    const found = scriptedFetch([provider('https://watch.plex.tv/show/twin-peaks'), { status: 200 }]);
+    expect((await new PlexLinks(quietLogger(), found.impl).resolve(s))?.url).toBe('https://watch.plex.tv/show/twin-peaks/season/2/episode/3');
+    expect(found.calls[0]?.url).toContain('/5d9c086c46115600200aa2fe'); // the show, not the episode
+    expect(found.calls[1]).toMatchObject({ method: 'HEAD', url: 'https://watch.plex.tv/show/twin-peaks/season/2/episode/3' });
+
+    const missing = scriptedFetch([provider('https://watch.plex.tv/show/twin-peaks'), { status: 404 }]);
+    expect((await new PlexLinks(quietLogger(), missing.impl).resolve(s))?.url).toBe('https://watch.plex.tv/show/twin-peaks');
+  });
+
+  it('gives no link when the provider has no page or fails', async () => {
+    const s = { ...movieSession, guid: 'plex://movie/5d776825880197001ec967c6' };
+    const fetch = scriptedFetch([{ status: 401, body: {} }, { status: 500, body: {} }]);
+    expect(await new PlexLinks(quietLogger(), fetch.impl).resolve(s)).toBeUndefined();
+    expect(await new PlexLinks(quietLogger(), fetch.impl).resolve(s)).toBeUndefined();
   });
 });
 

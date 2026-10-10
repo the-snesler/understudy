@@ -8,6 +8,7 @@ import { timeAgo } from '../../web/layout.js';
 import { stabiliseTimestamps } from '../shared/timestamps.js';
 import { ArtworkResolver, signThumb, verifyThumb, type Artwork } from './artwork.js';
 import { TautulliClient, type TautulliSession } from './client.js';
+import { PlexLinks } from './plex-links.js';
 import { chooseSession, matchesFilter, mediaKind, toNowPlaying } from './session.js';
 
 const template = (title: string, value: string, description: string) =>
@@ -78,6 +79,10 @@ const configSchema = z.object({
     .trim()
     .default('')
     .meta({ title: 'Small image', description: 'Badge in the corner of the artwork: a square HTTPS image URL or a Discord app asset key (e.g. "plex").' }),
+  plexButton: z
+    .boolean()
+    .default(true)
+    .meta({ title: '"View on Plex" button', description: "Add a button linking to the item's public Plex page (Plex Discover for movies and TV, Plexamp for music)." }),
   links: z.boolean().default(true).meta({ title: 'IMDb/TMDB button', description: 'Add a button linking to the movie or show.' }),
 });
 
@@ -116,6 +121,7 @@ function createTautulli(ctx: SourceContext<Config>) {
     proxyUrl: proxyUsable ? (thumb) => `${publicUrl}${ctx.publicBase}/art/${signThumb(thumb, artSecret)}` : undefined,
     fallback: config.fallbackImage || undefined,
   });
+  const plexLinks = new PlexLinks(log);
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let last: PollResult | undefined;
@@ -132,12 +138,16 @@ function createTautulli(ctx: SourceContext<Config>) {
     if (chosen) {
       const activity = toNowPlaying(chosen, { name: config.activityName, templates: config, now: at });
       stabiliseTimestamps(activity, published, DRIFT_MS);
-      const artwork = await resolver.resolve(chosen);
+      const [artwork, plexLink] = await Promise.all([
+        resolver.resolve(chosen),
+        config.plexButton ? plexLinks.resolve(chosen) : undefined,
+      ]);
       const kind = mediaKind(chosen);
       const imageText = kind === 'track' ? chosen.parent_title : kind === 'episode' ? chosen.grandparent_title : chosen.title;
       if (artwork.url) activity.largeImage = { url: artwork.url, ...(imageText && { text: imageText }) };
       if (config.smallImage) activity.smallImage = { url: config.smallImage, text: config.activityName };
-      if (config.links && artwork.links.length) activity.links = artwork.links;
+      const links = [...(plexLink ? [plexLink] : []), ...(config.links ? artwork.links : [])];
+      if (links.length) activity.links = links;
       result.activity = activity;
       result.artwork = artwork;
     }
