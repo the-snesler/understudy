@@ -137,6 +137,11 @@ Discord loads artwork itself, so images must be public HTTPS URLs. In order:
 The text lines are templates, e.g. `S{seasonPadded}E{episodePadded}[ · {episodeTitle}]`. Text in
 `[brackets]` is dropped when a variable inside is empty. The settings page lists every variable.
 
+The buttons can link to the item's public Plex page ("View on Plex": `watch.plex.tv` for movies
+and TV, `listen.plex.tv` for music) and to IMDb (or TMDB). The Plex page is only known for items
+matched by Plex's own agents. Episodes link to the episode page when Plex numbers the episode the
+same way your library does, and to the show's page otherwise.
+
 ## Jellyfin / Emby setup
 
 On the Jellyfin / Emby page, set:
