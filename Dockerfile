@@ -11,6 +11,8 @@ FROM base AS build
 RUN pnpm install --frozen-lockfile
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
+COPY scripts ./scripts
+COPY assets ./assets
 RUN pnpm build
 
 FROM base AS deps
@@ -21,7 +23,7 @@ ENV NODE_ENV=production DATA_DIR=/data PORT=8080
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY assets ./assets
+COPY --from=build /app/assets ./assets
 COPY package.json ./
 RUN mkdir -p /data && chown node:node /data
 USER node

@@ -6,3 +6,9 @@ dist/
 data/
 .env
 *.log
+
+# Built self-hosted UI assets
+assets/app.css
+assets/ui.js
+assets/sortable.min.js
+assets/fonts/
