@@ -11,6 +11,7 @@ import type {
   Plugin,
   SourceInfo,
 } from './plugin.js';
+import { sharedSettingsSchema, TMDB_SOURCE_PLUGINS, type SharedSettings } from './shared-settings.js';
 import { ScopedState, type JsonStore } from './store.js';
 
 export interface InstanceConfig {
@@ -30,14 +31,19 @@ export interface AppConfig {
   /** Optional when reading pre-hub configuration; migration writes a complete value. */
   hub?: HubRules;
   history?: { retentionDays: number };
+  shared?: SharedSettings;
 }
 
 export const emptyConfig = (): AppConfig => ({ version: 1, hub: defaultHubRules(), instances: [] });
 
 const LEGACY_RULE_FIELDS = ['sourcePriority', 'paused', 'quietHours', 'timeZone'] as const;
 
-/** One-time conversion from Discord-owned selection rules to shared hub rules and source order. */
+/** Convert legacy selection rules and per-source TMDB credentials into shared settings. */
 export function migrateAppConfig(config: AppConfig, sourceIds: string[]): AppConfig {
+  // Existing shared settings take precedence, including an explicitly cleared key.
+  const legacyKey = config.instances.find((instance) => TMDB_SOURCE_PLUGINS.has(instance.plugin)
+    && typeof instance.config.tmdbKey === 'string' && instance.config.tmdbKey.trim())?.config.tmdbKey;
+  const shared = sharedSettingsSchema.parse(config.shared ?? { tmdbKey: legacyKey });
   const discord = config.instances.find((instance) => instance.plugin === 'discord');
   const legacyRules = (instance: InstanceConfig | undefined): Partial<HubRules> =>
     Object.fromEntries(['paused', 'quietHours', 'timeZone'].flatMap((key) =>
@@ -56,6 +62,10 @@ export function migrateAppConfig(config: AppConfig, sourceIds: string[]): AppCon
   let nextSource = 0;
   const instances = config.instances.map((original) => {
     const instance = ids.has(original.id) ? sources[nextSource++]! : original;
+    if (TMDB_SOURCE_PLUGINS.has(instance.plugin)) {
+      const { tmdbKey: _legacyKey, ...cleaned } = instance.config;
+      return { ...instance, config: cleaned };
+    }
     if (instance.plugin !== 'discord') return instance;
     const overrides = Object.fromEntries(Object.entries(legacyRules(instance)).filter(([key, value]) =>
       value !== hub[key as keyof HubRules],
@@ -69,7 +79,7 @@ export function migrateAppConfig(config: AppConfig, sourceIds: string[]): AppCon
       ...(Object.keys(overrides).length ? { rules: { ...overrides, ...instance.rules } } : {}),
     };
   });
-  const migrated = { ...config, hub, instances };
+  const migrated = { ...config, hub, shared, instances };
   return JSON.stringify(migrated) === JSON.stringify(config) ? config : migrated;
 }
 
@@ -139,6 +149,28 @@ export class Registry {
 
   hubRules(): HubRules {
     return hubRulesSchema.parse(migrateAppConfig(this.opts.config.get(), this.sources().map((source) => source.id)).hub ?? {});
+  }
+
+  sharedSettings(): SharedSettings {
+    return migrateAppConfig(this.opts.config.get(), this.sources().map((source) => source.id)).shared!;
+  }
+
+  saveSharedSettings(raw: Record<string, unknown>): Promise<SaveResult> {
+    return this.serial(async () => {
+      const parsed = sharedSettingsSchema.safeParse(raw);
+      if (!parsed.success) return { ok: false, issues: parsed.error.issues };
+      const previous = this.sharedSettings();
+      await this.migrate();
+      await this.opts.config.update((config) => ({ ...config, shared: parsed.data }));
+      if (previous.tmdbKey !== parsed.data.tmdbKey) {
+        for (const cfg of this.opts.config.get().instances) {
+          if (!cfg.enabled || !TMDB_SOURCE_PLUGINS.has(cfg.plugin)) continue;
+          await this.stopInstance(cfg.id);
+          await this.startInstance(cfg);
+        }
+      }
+      return { ok: true };
+    });
   }
 
   historyRetention(): number {
@@ -371,6 +403,7 @@ export class Registry {
     const base = {
       instanceId: cfg.id,
       config: parsed.data,
+      sharedSettings: this.sharedSettings(),
       log,
       state: new ScopedState<Record<string, unknown>>(this.opts.state, cfg.id),
       env: this.opts.env,

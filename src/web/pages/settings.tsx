@@ -1,7 +1,9 @@
 import type { HistoryStore } from '../../core/history.js';
+import { sharedSettingsSchema } from '../../core/shared-settings.js';
 import type { Registry } from '../../core/registry.js';
 import { FeedsCard } from '../components/history.js';
 import { Breadcrumb, PageHeader } from '../components/page.js';
+import { SettingsFields } from '../forms.js';
 import { Icon } from '../icons.js';
 import { Layout, Notice } from '../layout.js';
 import { HubSettings } from '../settings.js';
@@ -28,6 +30,13 @@ export function SettingsPage({
       <div class="plugin-grid">
         <div>
           <HubRulesLink />
+          <form class="settings-form" action="/settings/shared" method="post">
+            <SettingsFields schema={sharedSettingsSchema} values={registry.sharedSettings()} />
+            <div class="mb-4">
+              {!!registry.sharedSettings().tmdbKey && <label class="small"><input type="checkbox" name="clearTmdbKey" /> Remove the saved TMDB key</label>}
+              <button class="btn primary mt-4">Save shared settings</button>
+            </div>
+          </form>
           <RetentionForm retentionDays={registry.historyRetention()} />
           {history && <FeedAccessCard />}
         </div>

@@ -8,6 +8,7 @@ import { csrf } from 'hono/csrf';
 import { stableStringify } from '../core/activity.js';
 import type { HistoryStore } from '../core/history.js';
 import { hubRulesSchema, type HubRules } from '../core/hub.js';
+import { sharedSettingsSchema } from '../core/shared-settings.js';
 import type { ScopedState } from '../core/store.js';
 import type { Controls } from '../core/controls.js';
 import type { Hub } from '../core/hub.js';
@@ -240,6 +241,14 @@ export function createWebApp(opts: WebOptions): Hono {
     const result = await registry.saveHubRules(raw);
     if (!result.ok) return hubSettings(c, { errors: issuesByField(result.issues), values: raw });
     return c.redirect('/settings/hub?notice=saved');
+  });
+  app.post('/settings/shared', async (c) => {
+    const form = await c.req.parseBody();
+    const raw = parseSettingsForm(sharedSettingsSchema, form, registry.sharedSettings());
+    if (form.clearTmdbKey === 'on') raw.tmdbKey = '';
+    const result = await registry.saveSharedSettings(raw);
+    if (!result.ok) return c.text('Invalid shared settings', 400);
+    return c.redirect('/settings?notice=saved');
   });
   app.post('/settings/history', async (c) => {
     const days = Number((await c.req.parseBody()).retentionDays);

@@ -224,7 +224,7 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
 
-async function boot(handle: (call: Call) => Reply | undefined, config: Record<string, unknown>, state?: Record<string, unknown>) {
+async function boot(handle: (call: Call) => Reply | undefined, config: Record<string, unknown>, state?: Record<string, unknown>, tmdbKey = '') {
   const trakt = fakeTrakt(handle);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'srpc-trakt-'));
   dirs.push(dir);
@@ -242,6 +242,7 @@ async function boot(handle: (call: Call) => Reply | undefined, config: Record<st
   });
   registries.push(registry);
   await registry.ensureInstances([{ plugin: 'trakt', enabled: true }]);
+  await registry.saveSharedSettings({ tmdbKey });
   expect((await registry.saveConfig('trakt', config)).ok).toBe(true);
   const app = createWebApp({ registry, hub, logs, env: { publicUrl: undefined }, uiPassword: undefined });
   const post = (p: string) =>
@@ -274,7 +275,8 @@ describe('trakt plugin', () => {
         if (c.url.pathname === '/users/sean/watching') return watching ? { status: 200, body: watching } : { status: 204 };
         if (c.url.hostname === 'api.themoviedb.org') return { status: 200, body: { poster_path: '/matrix.jpg' } };
       },
-      { clientId: 'cid', username: 'sean', tmdbKey: 'k', smallImage: 'trakt' },
+      { clientId: 'cid', username: 'sean', smallImage: 'trakt' },
+      undefined, 'k',
     );
     await until(() => !!t.hub.get('trakt'));
     expect(t.hub.get('trakt')!.activity).toEqual({

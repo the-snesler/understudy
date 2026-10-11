@@ -4,6 +4,7 @@ import type { z } from 'zod';
 import type { NowPlaying, SourceActivity } from './activity.js';
 import type { HubState } from './hub.js';
 import type { Logger } from './log.js';
+import type { SharedSettings } from './shared-settings.js';
 import type { ScopedState } from './store.js';
 
 /**
@@ -35,6 +36,8 @@ export interface AppEnv {
 export interface BaseContext<C> {
   instanceId: string;
   config: C;
+  /** Shared service credentials, supplied by the registry. */
+  sharedSettings?: SharedSettings;
   log: Logger;
   /** Persistent runtime state for this instance (tokens, session ids, ...). */
   state: ScopedState<Record<string, unknown>>;

@@ -58,15 +58,6 @@ const configSchema = z.object({
   episodeSubtitle: template('Episode: second line', '[S{seasonPadded}E{episodePadded}][ · {episodeTitle}]', ''),
   trackTitle: template('Track: first line', '{track}', 'Also used for music videos.'),
   trackSubtitle: template('Track: second line', '{artist}', ''),
-  tmdbKey: z
-    .string()
-    .trim()
-    .default('')
-    .meta({
-      title: 'TMDB API key (optional)',
-      description: 'A TMDB v3 API key or v4 read access token, for movie and show posters (themoviedb.org → Settings → API).',
-      secret: true,
-    }),
   albumArt: z
     .boolean()
     .default(true)
@@ -124,7 +115,7 @@ function createJellyfin(ctx: SourceContext<Config>) {
   const resolver = new ArtworkResolver({
     client,
     log,
-    tmdbKey: config.tmdbKey || undefined,
+    tmdbKey: ctx.sharedSettings?.tmdbKey || undefined,
     albumArt: config.albumArt,
     proxyUrl: proxyUsable
       ? (itemId) => {

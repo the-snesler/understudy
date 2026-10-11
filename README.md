@@ -130,7 +130,7 @@ On the Plex (Tautulli) page, set:
 - **Users**: your Plex username. Otherwise anyone streaming from your server shows up as you.
 
 Discord loads artwork itself, so images must be public HTTPS URLs. In order:
-1. **TMDB posters** for movies and shows, if you add a TMDB API key or read access token.
+1. **TMDB posters** for movies and shows, using the shared TMDB API key or read access token in **Settings**.
 2. **iTunes album art** for music (no key needed).
 3. Optionally, **Plex artwork served through this app**. This needs `PUBLIC_URL` to be an HTTPS
    address Discord can reach. Only signed image URLs under `/public/` work without the UI password.
@@ -157,7 +157,7 @@ Movies, episodes and music are shown, plus music videos and audiobooks. The acti
 the server type ("Watching Jellyfin") unless you set a name. Use **Clients or devices** to only show
 some apps (e.g. `Finamp`) or devices (e.g. `Living Room TV`).
 
-Artwork works as for Plex: TMDB posters (with a TMDB key), iTunes/Deezer album art, optionally the
+Artwork works as for Plex: TMDB posters (with the shared key in Settings), iTunes/Deezer album art, optionally the
 server's own images served through this app (needs an HTTPS `PUBLIC_URL`), then a fallback image.
 The text lines are templates too; the settings page lists every variable.
 
@@ -183,9 +183,13 @@ Trakt is polled every 30 seconds by default, and the progress bar follows Trakt'
 end times. Trakt has no paused state: when you pause, your player stops scrobbling and the
 activity goes away. When Trakt limits requests, polling waits as long as it asks.
 
-Trakt doesn't allow its own images to be hotlinked, so posters come from **TMDB** if you add a TMDB
-API key or read access token, then from the **fallback image**. The buttons can link to IMDb (or
+Trakt doesn't allow its own images to be hotlinked, so posters come from **TMDB** using the shared TMDB
+API key or read access token in **Settings**, then from the **fallback image**. The buttons can link to IMDb (or
 TMDB) and the Trakt page. The text lines are templates, as for Plex.
+
+The TMDB credential is shared across Plex, Jellyfin/Emby, and Trakt. Existing per-source keys
+are migrated automatically: the first nonempty key in source order is used unless a shared
+setting already exists. Replace or remove it in **Settings → Shared artwork**.
 
 ## Last.fm / ListenBrainz setup
 

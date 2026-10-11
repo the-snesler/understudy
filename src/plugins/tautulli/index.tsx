@@ -44,9 +44,7 @@ const configSchema = z.object({
   episodeSubtitle: template('Second line', 'S{seasonPadded}E{episodePadded}[ · {episodeTitle}]', 'Episode'),
   trackTitle: template('First line', '{track}', 'Track'),
   trackSubtitle: template('Second line', '{artist}', 'Track'),
-  tmdbEnabled: z.boolean().default(true).meta({ title: 'Posters from TMDB', group: ARTWORK, order: 1, description: 'Movies and shows. Needs a TMDB API key or read access token.' }),
-  tmdbKey: z.string().trim().default('')
-    .meta({ title: 'TMDB API key', group: ARTWORK, description: 'A TMDB API key or read access token.', secret: true, disabledIf: { field: 'tmdbEnabled', equals: false } }),
+  tmdbEnabled: z.boolean().default(true).meta({ title: 'Posters from TMDB', group: ARTWORK, order: 1, description: 'Movies and shows. Uses the shared TMDB key in Settings.' }),
   albumArt: z.boolean().default(true)
     .meta({ title: 'Album art from iTunes and Deezer', group: ARTWORK, order: 2, description: 'Music. No key needed.' }),
   proxyArt: z.boolean().default(false)
@@ -91,7 +89,7 @@ function createTautulli(ctx: SourceContext<Config>) {
   const resolver = new ArtworkResolver({
     client,
     log,
-    tmdbKey: config.tmdbEnabled ? config.tmdbKey || undefined : undefined,
+    tmdbKey: config.tmdbEnabled ? ctx.sharedSettings?.tmdbKey || undefined : undefined,
     albumArt: config.albumArt,
     proxyUrl: proxyUsable ? (thumb) => `${publicUrl}${ctx.publicBase}/art/${signThumb(thumb, artSecret)}` : undefined,
     fallback: config.fallbackImage || undefined,

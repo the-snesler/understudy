@@ -52,15 +52,6 @@ const configSchema = z.object({
   movieSubtitle: template('Movie: second line', '', ''),
   episodeTitle: template('Episode: first line', '{show}', ''),
   episodeSubtitle: template('Episode: second line', 'S{seasonPadded}E{episodePadded}[ · {episodeTitle}]', ''),
-  tmdbKey: z
-    .string()
-    .trim()
-    .default('')
-    .meta({
-      title: 'TMDB API key (optional)',
-      description: 'A TMDB v3 API key or v4 read access token, for movie and show posters (themoviedb.org → Settings → API).',
-      secret: true,
-    }),
   fallbackImage: z
     .string()
     .trim()
@@ -112,7 +103,7 @@ export function createTraktPlugin(fetchImpl?: typeof fetch) {
     /** Update the state now and persist it in the background (the store applies changes in memory at once). */
     const save = (patch: Partial<PersistedState>) => void write(patch).catch((err: unknown) => log.error(`Could not save state: ${errorMessage(err)}`));
     const client = new TraktClient({ clientId: config.clientId, clientSecret: config.clientSecret || undefined, fetchImpl });
-    const resolver = new ArtworkResolver({ log, tmdbKey: config.tmdbKey || undefined, fallback: config.fallbackImage || undefined, fetchImpl });
+    const resolver = new ArtworkResolver({ log, tmdbKey: ctx.sharedSettings?.tmdbKey || undefined, fallback: config.fallbackImage || undefined, fetchImpl });
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     let deviceTimer: ReturnType<typeof setTimeout> | undefined;
