@@ -8,20 +8,24 @@ import { ArtworkResolver, type Artwork } from './artwork.js';
 import { LastfmClient, ListenBrainzClient, ScrobblerError, type Scrobble, type ScrobbleClient } from './client.js';
 import { PlayTracker, playTiming, toNowPlaying, trackKey, trackLink, type Timing } from './track.js';
 
-const VARS_HELP = 'Variables: {track} {artist} {album}. Text in [brackets] is dropped if a variable inside is empty.';
+const CONNECTION = { title: 'Connection', description: 'Choose your scrobbling service and account.' };
+const TEMPLATES = { title: 'How it reads', description: 'Customize the two lines shown while listening.' };
+const PLAYBACK = { title: 'Playback', description: 'Control track progress and when stale activity disappears.' };
+const ARTWORK = { title: 'Artwork and links', description: 'Choose album covers and links to the music you are playing.' };
 
 const configSchema = z.object({
   service: z
     .enum(['Last.fm', 'ListenBrainz'])
     .default('Last.fm')
-    .meta({ title: 'Service', description: 'Where your player scrobbles to.' }),
-  username: z.string().trim().default('').meta({ title: 'Username', description: 'Your Last.fm or ListenBrainz username.' }),
+    .meta({ group: CONNECTION, title: 'Service', widget: 'segmented', options: ['Last.fm', 'ListenBrainz'], description: 'Where your player scrobbles to.' }),
+  username: z.string().trim().default('').meta({ group: CONNECTION, title: 'Username', description: 'Your Last.fm or ListenBrainz username.' }),
   apiKey: z
     .string()
     .trim()
     .default('')
     .meta({
-      title: 'Last.fm API key',
+      group: CONNECTION,
+      title: 'Last.fm API key', showIf: { field: 'service', equals: 'Last.fm' },
       description: 'Last.fm only. Create one at last.fm/api/account/create (any name; the callback URL can stay empty).',
       secret: true,
     }),
@@ -30,7 +34,8 @@ const configSchema = z.object({
     .trim()
     .default('')
     .meta({
-      title: 'ListenBrainz user token (optional)',
+      group: CONNECTION,
+      title: 'ListenBrainz user token (optional)', showIf: { field: 'service', equals: 'ListenBrainz' },
       description: 'ListenBrainz only; not needed to read public listens. Sent with each request if set (listenbrainz.org → Settings).',
       secret: true,
     }),
@@ -40,18 +45,19 @@ const configSchema = z.object({
     .min(10)
     .max(300)
     .default(15)
-    .meta({ title: 'Poll interval (seconds)', description: 'How often to ask what is playing.' }),
+    .meta({ group: CONNECTION, title: 'Check every', widget: 'segmented', options: [10, 15, 30, 60], labels: { '10': '10s', '15': '15s', '30': '30s', '60': '60s' }, description: 'How often to ask what is playing.' }),
   activityName: z
     .string()
     .trim()
     .default('')
-    .meta({ title: 'Activity name', description: 'Shown as "Listening to <name>". Leave empty for "Last.fm" or "ListenBrainz".' }),
-  titleTemplate: z.string().default('{track}').meta({ title: 'First line', description: VARS_HELP }),
-  subtitleTemplate: z.string().default('{artist}').meta({ title: 'Second line', description: '' }),
+    .meta({ group: TEMPLATES, title: 'Activity name', description: 'Shown as "Listening to <name>". Leave empty for "Last.fm" or "ListenBrainz".' }),
+  titleTemplate: z.string().default('{track}').meta({ group: TEMPLATES, title: 'First line', widget: 'template', templateTab: 'Track', variables: ['track', 'artist', 'album'] }),
+  subtitleTemplate: z.string().default('{artist}').meta({ group: TEMPLATES, title: 'Second line', widget: 'template', templateTab: 'Track', variables: ['track', 'artist', 'album'] }),
   progressBar: z
     .boolean()
     .default(true)
     .meta({
+      group: PLAYBACK,
       title: 'Progress bar',
       description:
         "When the track's length is known and the track started while this app was watching. Neither service says when a track started, so it's timed from when it was first seen (up to one poll interval late). On Last.fm this costs one extra request per track.",
@@ -63,6 +69,7 @@ const configSchema = z.object({
     .max(600)
     .default(15)
     .meta({
+      group: PLAYBACK,
       title: 'Hide after (minutes)',
       description:
         "Both services can keep reporting a track after you stop playing. A track is hidden 2 minutes after its length has passed; if its length isn't known, after this many minutes. 0 = never.",
@@ -70,21 +77,21 @@ const configSchema = z.object({
   albumArt: z
     .boolean()
     .default(true)
-    .meta({ title: 'Album art from iTunes/Deezer', description: 'Look up album covers in the iTunes and Deezer catalogues (no key needed) when the service has none.' }),
+    .meta({ group: ARTWORK, title: 'Album art from iTunes/Deezer', description: 'Look up album covers in the iTunes and Deezer catalogues (no key needed) when the service has none.' }),
   fallbackImage: z
     .string()
     .trim()
     .default('')
-    .meta({ title: 'Fallback image', description: 'HTTPS URL or Discord app asset key used when no artwork is found.' }),
+    .meta({ group: ARTWORK, title: 'Fallback image', description: 'HTTPS URL or Discord app asset key used when no artwork is found.' }),
   smallImage: z
     .string()
     .trim()
     .default('')
-    .meta({ title: 'Small image', description: 'Badge in the corner of the artwork: a square HTTPS image URL or a Discord app asset key.' }),
+    .meta({ group: ARTWORK, title: 'Small image', description: 'Badge in the corner of the artwork: a square HTTPS image URL or a Discord app asset key.' }),
   links: z
     .boolean()
     .default(true)
-    .meta({ title: 'Track button', description: 'Add a button linking to the track on Last.fm, or on MusicBrainz for ListenBrainz tracks with a recording id.' }),
+    .meta({ group: ARTWORK, title: 'Track button', description: 'Add a button linking to the track on Last.fm, or on MusicBrainz for ListenBrainz tracks with a recording id.' }),
 });
 
 type Config = z.infer<typeof configSchema>;

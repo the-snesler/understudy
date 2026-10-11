@@ -174,7 +174,7 @@ function TemplateFields({ items, props }: { items: Field[]; props: FieldsProps }
         <div class="form-grid">{entries.map((field) => <FieldInput field={field} props={props} />)}</div>
         <p class="help">Insert a variable. Text in [brackets] is dropped when a variable inside is empty.</p>
         <div class="variable-list">{variables.map((variable) => <button type="button" class="variable-button" data-insert-variable={`{${variable}}`}>{`{${variable}}`}</button>)}</div>
-        <div class="template-preview" aria-live="polite"><span class="muted small">Preview uses a current stream when one is available.</span></div>
+        {previewUrl && <div class="template-preview" aria-live="polite"><span class="muted small">Preview uses a current stream when one is available.</span></div>}
       </div>;
     })}
   </div>;
