@@ -292,12 +292,13 @@ URL, e.g. `1145360` from `store.steampowered.com/app/1145360/`), so only games p
 The Overview follows **Sources → Hub → Outputs**. All source activity is recorded, including
 activity that loses priority or is hidden by paused-media and quiet-hour rules. Outputs call
 `ctx.reportShown(activity | null)` after a successful send or clear; **Displayed** totals count the
-union of those output intervals, so two outputs showing activity do not double-count the time.
+union of those output intervals, including paused activity that was actually shown, so two outputs
+showing activity do not double-count the time.
 
-Today’s watching, listening, and playing totals sum observed source segment lengths, including
-paused segments, clipped to the local day in the Hub’s time zone. Overlapping sources can add up
-to more than elapsed wall time. The timeline page is a stub; the underlying history is available
-through the feeds:
+Today’s watching, listening, and playing totals count active time, excluding paused source
+segments and counting overlapping observations once per kind. Intervals are clipped to the local
+day in the Hub’s time zone. Different kinds count independently when they happen at the same
+time. The timeline page is a stub; the underlying history is available through the feeds:
 
 - `/feed/history.ics?token=…` supplies calendar events with stable UIDs.
 - `/api/history.json?token=…` supplies source and output segments. Optional `from`/`to` query

@@ -226,14 +226,18 @@ export class HistoryStore {
     const bounds = zonedDayBounds(at, timeZone);
     const result: DailyStats = { ...bounds, watching: 0, listening: 0, playing: 0, displayed: 0 };
     const end = Math.min(at, bounds.endAt);
+    const active: Record<ActivityKind, [number, number][]> = { watching: [], listening: [], playing: [] };
     const displayed: [number, number][] = [];
     for (const item of this.query({ from: bounds.startAt, to: end })) {
       const start = Math.max(item.startedAt, bounds.startAt);
       const finish = Math.min(item.endedAt ?? at, end);
       if (finish <= start) continue;
       if (item.outputId !== undefined) displayed.push([start, finish]);
-      else result[item.kind] += finish - start;
+      else if (!item.paused) active[item.kind].push([start, finish]);
     }
+    result.watching = unionDuration(active.watching);
+    result.listening = unionDuration(active.listening);
+    result.playing = unionDuration(active.playing);
     result.displayed = unionDuration(displayed);
     return result;
   }
@@ -316,7 +320,7 @@ export function zonedDayBounds(at: number, timeZone: string): { startAt: number;
   };
 }
 
-/** Overlapping output sessions count once, even when several outputs display the activity. */
+/** Elapsed time covered by intervals, counting overlaps only once. */
 export function unionDuration(intervals: [number, number][]): number {
   const sorted = intervals.filter(([start, end]) => end > start).sort(([a], [b]) => a - b);
   if (!sorted.length) return 0;

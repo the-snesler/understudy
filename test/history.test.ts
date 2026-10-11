@@ -172,6 +172,61 @@ describe('persistent activity history', () => {
 });
 
 describe('daily totals', () => {
+  it('counts duplicate movie observations once and excludes paused time while preserving displayed time', () => {
+    const minute = 60_000;
+    let now = Date.parse('2026-10-10T12:00:00Z');
+    const store = history(() => now);
+    store.recordSource('plex', activity());
+    store.recordSource('trakt', activity());
+    now += 10 * minute;
+    store.recordSource('trakt', null);
+    store.recordSource('plex', activity({ paused: true }));
+    store.recordShown('discord', shown({ paused: true }));
+    now += 5 * minute;
+    store.recordShown('calendar', shown({ paused: true }));
+    now += 5 * minute;
+    store.recordSource('plex', null);
+    store.recordShown('discord', null);
+    store.recordShown('calendar', null);
+
+    expect(store.today('UTC')).toMatchObject({
+      watching: 10 * minute, listening: 0, playing: 0, displayed: 10 * minute,
+    });
+    expect(store.query({ scope: 'source' })).toHaveLength(3);
+  });
+
+  it.each(['watching', 'listening', 'playing'] as const)('unions active %s intervals after clipping them to the local day and query time', (kind) => {
+    const minute = 60_000;
+    let now = Date.parse('2026-10-10T04:50:00Z');
+    const store = history(() => now);
+    store.recordSource('first', activity({ kind }));
+    now += 5 * minute;
+    store.recordSource('second', activity({ kind, key: 'another-item' }));
+    now = Date.parse('2026-10-10T05:05:00Z');
+    store.recordSource('first', activity({ kind, paused: true }));
+    now += 5 * minute;
+    store.recordSource('second', activity({ kind, key: 'another-item', paused: true }));
+    now = Date.parse('2026-10-10T05:25:00Z');
+    store.recordSource('first', activity({ kind }));
+    now += 15 * minute;
+
+    expect(store.today('America/Chicago')).toMatchObject({
+      watching: 0, listening: 0, playing: 0, displayed: 0, [kind]: 25 * minute,
+    });
+    expect(store.today('America/Chicago', Date.parse('2026-10-10T05:30:00Z'))[kind]).toBe(15 * minute);
+  });
+
+  it('counts simultaneous activity of different kinds independently', () => {
+    let now = Date.parse('2026-10-10T12:00:00Z');
+    const store = history(() => now);
+    store.recordSource('plex', activity());
+    store.recordSource('music', activity({ kind: 'listening' }));
+    store.recordSource('switch', activity({ kind: 'playing' }));
+    now += 10 * 60_000;
+
+    expect(store.today('UTC')).toMatchObject({ watching: 600_000, listening: 600_000, playing: 600_000 });
+  });
+
   it('clips source intervals to the local day and counts overlapping output intervals once', () => {
     let now = Date.parse('2026-10-10T04:00:00Z'); // 11 PM in Chicago on October 9.
     const store = history(() => now);
@@ -205,7 +260,7 @@ describe('daily totals', () => {
     expect(() => zonedDayBounds(Date.now(), 'Mars/Olympus')).toThrow();
   });
 
-  it('merges contained and touching output intervals', () => {
+  it('merges contained and touching intervals', () => {
     expect(unionDuration([[10, 30], [20, 40], [25, 28], [40, 50], [70, 80]])).toBe(50);
     expect(unionDuration([])).toBe(0);
     expect(unionDuration([[-10, 0], [-5, 5]])).toBe(15);
