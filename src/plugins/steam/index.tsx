@@ -9,42 +9,49 @@ import { activityKey, currentGame, isIgnored, toNowPlaying, type SteamGame } fro
 
 const API_KEY_URL = 'https://steamcommunity.com/dev/apikey';
 
+const CONNECTION = { title: 'Connection', description: 'Connect your Steam profile to Understudy.' };
+const GAMES = { title: 'Which games', description: 'Choose which games appear in your activity.' };
+const ACTIVITY = { title: 'How it reads', description: 'Choose the name shown while you are playing.' };
+const ARTWORK = { title: 'Artwork and links', description: 'Customize game artwork and the link to the Steam store.' };
+
 const configSchema = z.object({
   apiKey: z
     .string()
     .trim()
     .default('')
-    .meta({ title: 'Steam Web API key', description: `From ${API_KEY_URL}. Any domain name will do.`, secret: true }),
+    .meta({ group: CONNECTION, title: 'Steam Web API key', description: `From ${API_KEY_URL}. Any domain name will do.`, secret: true }),
   steamId: z
     .string()
     .trim()
     .refine((v) => !v || !!parseSteamId(v), 'Enter a SteamID64, a steamcommunity.com profile URL or a custom URL name')
     .default('')
     .meta({
+      group: CONNECTION,
       title: 'Steam profile',
       description: 'Your SteamID64 (7656119…), profile URL (steamcommunity.com/profiles/… or /id/…), or custom URL name.',
     }),
-  pollSeconds: z.number().int().min(15).max(300).default(30).meta({ title: 'Poll interval (seconds)', description: 'How often to ask Steam what you are playing.' }),
-  activityName: z.string().trim().min(1).default('Steam').meta({ title: 'Activity name', description: 'Shown as "Playing <name>", e.g. "Steam" or "Steam Deck".' }),
+  pollSeconds: z.number().int().min(15).max(300).default(30).meta({ group: CONNECTION, title: 'Check every', widget: 'segmented', options: [15, 30, 60, 120], labels: { '15': '15s', '30': '30s', '60': '60s', '120': '120s' }, description: 'How often to ask Steam what you are playing.' }),
   ignore: z
     .array(z.string().trim().min(1))
     .default([])
     .meta({
-      title: 'Ignore games',
+      group: GAMES,
+      title: 'Ignore games', widget: 'chips', placeholder: 'Add a game name or app ID',
       description:
-        "App ids or game names not to show, one per line. Useful for games you play on a PC running Discord, which shows them itself. The app id is the number in the game's store URL.",
+        "App IDs or game names not to show. Useful for games you play on a PC running Discord, which shows them itself. The app id is the number in the game's store URL.",
     }),
+  activityName: z.string().trim().min(1).default('Steam').meta({ group: ACTIVITY, title: 'Activity name', description: 'Shown as "Playing <name>", e.g. "Steam" or "Steam Deck".' }),
   fallbackImage: z
     .string()
     .trim()
     .default('')
-    .meta({ title: 'Fallback image', description: 'HTTPS URL or Discord app asset key used when the store has no artwork, e.g. for non-Steam games.' }),
+    .meta({ group: ARTWORK, title: 'Fallback image', description: 'HTTPS URL or Discord app asset key used when the store has no artwork, e.g. for non-Steam games.' }),
   smallImage: z
     .string()
     .trim()
     .default('')
-    .meta({ title: 'Small image', description: 'Badge in the corner of the game art: a square HTTPS image URL or a Discord app asset key (e.g. "steam").' }),
-  storeButton: z.boolean().default(false).meta({ title: 'Steam store button', description: "Add a \"View on Steam\" button linking to the game's store page." }),
+    .meta({ group: ARTWORK, title: 'Small image', description: 'Badge in the corner of the game art: a square HTTPS image URL or a Discord app asset key (e.g. "steam").' }),
+  storeButton: z.boolean().default(false).meta({ group: ARTWORK, title: 'Steam store button', description: "Add a \"View on Steam\" button linking to the game's store page." }),
 });
 
 type Config = z.infer<typeof configSchema>;

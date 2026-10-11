@@ -10,59 +10,69 @@ import { ArtworkResolver, signItem, verifyItem, type Artwork } from './artwork.j
 import { JellyfinClient, type JellyfinSession } from './client.js';
 import { chooseSession, isPlaying, matchesFilter, mediaKind, toNowPlaying } from './session.js';
 
-const template = (title: string, value: string, description: string) =>
-  z.string().default(value).meta({ title, description });
+const CONNECTION = { title: 'Connection', description: 'Connect to your Jellyfin or Emby server.' };
+const STREAMS = { title: 'Whose streams', description: 'Choose which users and devices can contribute activity. Empty lists allow everyone.' };
+const TEMPLATES = { title: 'How it reads', description: 'Customize the two lines shown for each kind of media.' };
+const ARTWORK = { title: 'Artwork and links', description: 'Choose posters, album covers, and buttons for your activity.' };
 
-const VARS_HELP =
-  'Variables: {title} {year} {show} {season} {episode} {seasonPadded} {episodePadded} {episodeTitle} {track} {artist} {albumArtist} {album} {genre} {genres} {studio} {rating} {user} {client} {device}. Text in [brackets] is dropped if a variable inside is empty.';
+const VARIABLES = {
+  Movie: ['title', 'year', 'genre', 'genres', 'studio', 'rating', 'user', 'client', 'device'],
+  Episode: ['show', 'season', 'episode', 'seasonPadded', 'episodePadded', 'episodeTitle', 'title', 'year', 'user', 'client', 'device'],
+  Track: ['track', 'artist', 'albumArtist', 'album', 'genre', 'genres', 'user', 'client', 'device'],
+};
+const template = (title: string, value: string, tab: keyof typeof VARIABLES) =>
+  z.string().default(value).meta({ title, group: TEMPLATES, widget: 'template', templateTab: tab, variables: VARIABLES[tab] });
 
 const configSchema = z.object({
   serverType: z
     .enum(['Jellyfin', 'Emby'])
     .default('Jellyfin')
-    .meta({ title: 'Server type', description: 'They share an API, but authenticate differently.' }),
+    .meta({ group: CONNECTION, title: 'Server type', widget: 'segmented', options: ['Jellyfin', 'Emby'], description: 'They share an API, but authenticate differently.' }),
   url: z
     .string()
     .trim()
     .regex(/^(https?:\/\/\S+)?$/, 'Must start with http:// or https://')
     .default('')
-    .meta({ title: 'Server URL', description: 'e.g. http://jellyfin:8096, including the base URL if you set one. For Emby, leave off /emby.' }),
+    .meta({ group: CONNECTION, title: 'Server URL', description: 'e.g. http://jellyfin:8096, including the base URL if you set one. For Emby, leave off /emby.' }),
   apiKey: z
     .string()
     .trim()
     .default('')
-    .meta({ title: 'API key', description: 'Jellyfin: Dashboard → API Keys. Emby: Settings → API Keys.', secret: true }),
+    .meta({ group: CONNECTION, title: 'API key', description: 'Jellyfin: Dashboard → API Keys. Emby: Settings → API Keys.', secret: true }),
   users: z
     .array(z.string().trim().min(1))
     .default([])
     .meta({
-      title: 'Users',
-      description: 'Usernames to show, one per line. Leave empty to show anyone playing on your server.',
+      group: STREAMS,
+      title: 'Users', widget: 'chips', placeholder: 'Add a username',
+      description: 'Usernames to show. Leave empty to show anyone playing on your server.',
     }),
   clients: z
     .array(z.string().trim().min(1))
     .default([])
     .meta({
-      title: 'Clients or devices',
-      description: 'Only show playback from these app names (e.g. "Jellyfin Web") or device names, one per line. Leave empty for any.',
+      group: STREAMS,
+      title: 'Clients or devices', widget: 'chips', placeholder: 'Add an app or device name',
+      description: 'Only show playback from these app names (e.g. "Jellyfin Web") or device names. Leave empty for any.',
     }),
-  pollSeconds: z.number().int().min(5).max(300).default(15).meta({ title: 'Poll interval (seconds)', description: 'How often to ask the server what is playing.' }),
+  pollSeconds: z.number().int().min(5).max(300).default(15).meta({ group: CONNECTION, title: 'Check every', widget: 'segmented', options: [5, 15, 30, 60], labels: { '5': '5s', '15': '15s', '30': '30s', '60': '60s' }, description: 'How often to ask the server what is playing.' }),
   activityName: z
     .string()
     .trim()
     .default('')
-    .meta({ title: 'Activity name', description: 'Shown as "Watching <name>". Leave empty for the server type ("Jellyfin" or "Emby").' }),
-  movieTitle: template('Movie: first line', '{title}[ ({year})]', VARS_HELP),
-  movieSubtitle: template('Movie: second line', '[{genre}] · [{studio}]', ''),
-  episodeTitle: template('Episode: first line', '{show}', ''),
-  episodeSubtitle: template('Episode: second line', '[S{seasonPadded}E{episodePadded}][ · {episodeTitle}]', ''),
-  trackTitle: template('Track: first line', '{track}', 'Also used for music videos.'),
-  trackSubtitle: template('Track: second line', '{artist}', ''),
+    .meta({ group: TEMPLATES, title: 'Activity name', description: 'Shown as "Watching <name>". Leave empty for the server type ("Jellyfin" or "Emby").' }),
+  movieTitle: template('First line', '{title}[ ({year})]', 'Movie'),
+  movieSubtitle: template('Second line', '[{genre}] · [{studio}]', 'Movie'),
+  episodeTitle: template('First line', '{show}', 'Episode'),
+  episodeSubtitle: template('Second line', '[S{seasonPadded}E{episodePadded}][ · {episodeTitle}]', 'Episode'),
+  trackTitle: template('First line', '{track}', 'Track'),
+  trackSubtitle: template('Second line', '{artist}', 'Track'),
   tmdbKey: z
     .string()
     .trim()
     .default('')
     .meta({
+      group: ARTWORK,
       title: 'TMDB API key (optional)',
       description: 'A TMDB v3 API key or v4 read access token, for movie and show posters (themoviedb.org → Settings → API).',
       secret: true,
@@ -70,11 +80,12 @@ const configSchema = z.object({
   albumArt: z
     .boolean()
     .default(true)
-    .meta({ title: 'Album art from iTunes/Deezer', description: 'Look up album covers in the iTunes and Deezer catalogues (no key needed).' }),
+    .meta({ group: ARTWORK, title: 'Album art from iTunes/Deezer', description: 'Look up album covers in the iTunes and Deezer catalogues (no key needed).' }),
   proxyArt: z
     .boolean()
     .default(false)
     .meta({
+      group: ARTWORK,
       title: 'Serve server artwork through this app',
       description:
         'Fallback when TMDB/iTunes/Deezer find nothing. Needs PUBLIC_URL to be an HTTPS address Discord can reach. Only signed image URLs under /public/ are exposed; the rest of the UI stays behind the password.',
@@ -83,13 +94,13 @@ const configSchema = z.object({
     .string()
     .trim()
     .default('')
-    .meta({ title: 'Fallback image', description: 'HTTPS URL or Discord app asset key used when no artwork is found.' }),
+    .meta({ group: ARTWORK, title: 'Fallback image', description: 'HTTPS URL or Discord app asset key used when no artwork is found.' }),
   smallImage: z
     .string()
     .trim()
     .default('')
-    .meta({ title: 'Small image', description: 'Badge in the corner of the artwork: a square HTTPS image URL or a Discord app asset key (e.g. "jellyfin").' }),
-  links: z.boolean().default(true).meta({ title: 'IMDb/TMDB button', description: 'Add a button linking to the movie or show.' }),
+    .meta({ group: ARTWORK, title: 'Small image', description: 'Badge in the corner of the artwork: a square HTTPS image URL or a Discord app asset key (e.g. "jellyfin").' }),
+  links: z.boolean().default(true).meta({ group: ARTWORK, title: 'IMDb/TMDB button', description: 'Add a button linking to the movie or show.' }),
 });
 
 type Config = z.infer<typeof configSchema>;

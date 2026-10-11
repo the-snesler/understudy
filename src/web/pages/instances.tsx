@@ -127,9 +127,10 @@ function InstanceSettingsForm({
   rulesValues,
 }: Pick<InstancePageProps, 'registry' | 'view' | 'panelProps' | 'values' | 'errors' | 'rulesValues'>) {
   const plugin = view.plugin!;
-  const labelGroup = plugin.id === 'tautulli'
-    ? 'Connection'
-    : plugin.id === 'discord' ? 'Discord application' : 'Settings';
+  const firstGroup = Object.values(plugin.configSchema.shape)[0]?.meta()?.group;
+  const labelGroup = plugin.id === 'discord'
+    ? 'Discord application'
+    : typeof firstGroup === 'string' ? firstGroup : firstGroup?.title ?? 'Settings';
   const labelField = (
     <div class="field">
       <label for="instance-label" class="field-label">Label</label>

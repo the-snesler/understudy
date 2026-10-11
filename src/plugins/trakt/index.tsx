@@ -10,23 +10,29 @@ import { imageText, itemLinks, toNowPlaying } from './watching.js';
 
 const NEW_APP_URL = 'https://app.trakt.tv/settings/apps/api/new';
 
-const template = (title: string, value: string, description: string) =>
-  z.string().default(value).meta({ title, description });
+const CONNECTION = { title: 'Connection', description: 'Configure your Trakt app and the account to follow.' };
+const TEMPLATES = { title: 'How it reads', description: 'Customize the two lines shown for movies and episodes.' };
+const ARTWORK = { title: 'Artwork and links', description: 'Choose posters and buttons for what you are watching.' };
 
-const VARS_HELP =
-  'Variables: {title} {year} {show} {season} {episode} {seasonPadded} {episodePadded} {episodeTitle}. For episodes, {title} is the episode title and {year} the show\'s year. Text in [brackets] is dropped if a variable inside is empty.';
+const VARIABLES = {
+  Movie: ['title', 'year'],
+  Episode: ['show', 'season', 'episode', 'seasonPadded', 'episodePadded', 'episodeTitle', 'title', 'year'],
+};
+const template = (title: string, value: string, tab: keyof typeof VARIABLES) =>
+  z.string().default(value).meta({ title, group: TEMPLATES, widget: 'template', templateTab: tab, variables: VARIABLES[tab] });
 
 const configSchema = z.object({
   clientId: z
     .string()
     .trim()
     .default('')
-    .meta({ title: 'Client ID', description: 'From the Trakt API app you created (see above). It identifies this app to Trakt.' }),
+    .meta({ group: CONNECTION, title: 'Client ID', description: 'From the Trakt API app you created (see above). It identifies this app to Trakt.' }),
   clientSecret: z
     .string()
     .trim()
     .default('')
     .meta({
+      group: CONNECTION,
       title: 'Client secret (optional)',
       description: 'Trakt has deprecated it and connecting normally works without it. Set it only if Trakt rejects the connection.',
       secret: true,
@@ -37,6 +43,7 @@ const configSchema = z.object({
     .regex(/^[^\s/]*$/, 'Just the username, e.g. "sean" from trakt.tv/users/sean')
     .default('')
     .meta({
+      group: CONNECTION,
       title: 'Trakt username',
       description: 'Whose activity to show: the name in your profile URL (trakt.tv/users/<name>). Leave empty to use the connected account.',
     }),
@@ -46,17 +53,18 @@ const configSchema = z.object({
     .min(15)
     .max(300)
     .default(30)
-    .meta({ title: 'Poll interval (seconds)', description: 'How often to ask Trakt what you are watching.' }),
-  activityName: z.string().trim().min(1).default('Trakt').meta({ title: 'Activity name', description: 'Shown as "Watching <name>".' }),
-  movieTitle: template('Movie: first line', '{title}[ ({year})]', VARS_HELP),
-  movieSubtitle: template('Movie: second line', '', ''),
-  episodeTitle: template('Episode: first line', '{show}', ''),
-  episodeSubtitle: template('Episode: second line', 'S{seasonPadded}E{episodePadded}[ · {episodeTitle}]', ''),
+    .meta({ group: CONNECTION, title: 'Check every', widget: 'segmented', options: [15, 30, 60, 120], labels: { '15': '15s', '30': '30s', '60': '60s', '120': '120s' }, description: 'How often to ask Trakt what you are watching.' }),
+  activityName: z.string().trim().min(1).default('Trakt').meta({ group: TEMPLATES, title: 'Activity name', description: 'Shown as "Watching <name>".' }),
+  movieTitle: template('First line', '{title}[ ({year})]', 'Movie'),
+  movieSubtitle: template('Second line', '', 'Movie'),
+  episodeTitle: template('First line', '{show}', 'Episode'),
+  episodeSubtitle: template('Second line', 'S{seasonPadded}E{episodePadded}[ · {episodeTitle}]', 'Episode'),
   tmdbKey: z
     .string()
     .trim()
     .default('')
     .meta({
+      group: ARTWORK,
       title: 'TMDB API key (optional)',
       description: 'A TMDB v3 API key or v4 read access token, for movie and show posters (themoviedb.org → Settings → API).',
       secret: true,
@@ -65,18 +73,19 @@ const configSchema = z.object({
     .string()
     .trim()
     .default('')
-    .meta({ title: 'Fallback image', description: 'HTTPS URL or Discord app asset key used when no poster is found.' }),
+    .meta({ group: ARTWORK, title: 'Fallback image', description: 'HTTPS URL or Discord app asset key used when no poster is found.' }),
   smallImage: z
     .string()
     .trim()
     .default('')
-    .meta({ title: 'Small image', description: 'Badge in the corner of the poster: a square HTTPS image URL or a Discord app asset key (e.g. "trakt").' }),
+    .meta({ group: ARTWORK, title: 'Small image', description: 'Badge in the corner of the poster: a square HTTPS image URL or a Discord app asset key (e.g. "trakt").' }),
   buttons: z
     .enum(['both', 'imdb', 'trakt', 'none'])
     .default('both')
     .meta({
-      title: 'Buttons',
-      description: '"both" = IMDb (or TMDB) and the Trakt page, "imdb" = IMDb, or TMDB if there is no IMDb id, "trakt" = the Trakt page, "none" = no buttons.',
+      group: ARTWORK,
+      title: 'Buttons', labels: { both: 'IMDb / TMDB and Trakt', imdb: 'IMDb / TMDB', trakt: 'Trakt', none: 'None' },
+      description: 'Add links to the movie or episode. TMDB is used when an IMDb page is unavailable.',
     }),
 });
 

@@ -9,13 +9,15 @@ import { defineSource, type SourceContext } from '../../core/plugin.js';
  * showing a one-off activity by hand.
  */
 
+const DEFAULTS = { title: 'Activity defaults', description: 'Choose the name pre-filled when you create an activity.' };
+
 const configSchema = z.object({
   name: z
     .string()
     .trim()
     .min(1)
     .default('Manual')
-    .meta({ title: 'Default activity name', description: 'Pre-filled "name" for new activities.' }),
+    .meta({ group: DEFAULTS, title: 'Default activity name', description: 'Pre-filled "name" for new activities.' }),
 });
 
 type Config = z.infer<typeof configSchema>;
