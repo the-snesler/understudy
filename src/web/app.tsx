@@ -11,18 +11,22 @@ import { hubRulesSchema, type HubRules } from '../core/hub.js';
 import type { ScopedState } from '../core/store.js';
 import type { Controls } from '../core/controls.js';
 import type { Hub } from '../core/hub.js';
-import type { LogBuffer, LogEntry } from '../core/log.js';
-import type { AppEnv, PanelProps } from '../core/plugin.js';
+import type { LogBuffer } from '../core/log.js';
+import type { AppEnv } from '../core/plugin.js';
 import type { InstanceView, Registry } from '../core/registry.js';
 import { Auth, newSessionSecret, SESSION_COOKIE, SESSION_TTL_MS } from './auth.js';
 import { registerAssets } from './assets.js';
-import { issuesByField, parseSettingsForm, SettingsFields } from './forms.js';
+import { issuesByField, parseSettingsForm } from './forms.js';
 import { APPLE_TOUCH_ICON, ICON } from './icon.js';
-import { Health, Layout, LoginPage, Notice, PublishingCard, timeAgo } from './layout.js';
-import { Dashboard, FeedsCard, RecentEvents, ToggleForm } from './dashboard.js';
-import { Icon, PluginIcon } from './icons.js';
+import { Health, LoginPage, PublishingCard } from './layout.js';
+import { Dashboard } from './dashboard.js';
 import { registerHistoryRoutes } from './history.js';
-import { HubSettings, OutputRulesCard, SaveBar } from './settings.js';
+import { ErrorPage } from './pages/error.js';
+import { AddInstancePage, InstanceLiveBlock, InstancePage, type InstancePageValues } from './pages/instances.js';
+import { LogPage } from './pages/log.js';
+import { OverviewPage } from './pages/overview.js';
+import { HubRulesPage, SettingsPage } from './pages/settings.js';
+import { TimelinePage } from './pages/timeline.js';
 
 const require = createRequire(import.meta.url);
 const HTMX = fs.readFileSync(require.resolve('htmx.org/dist/htmx.min.js'), 'utf8');
@@ -65,13 +69,6 @@ function safeReturn(value: unknown): string | undefined {
   const v = typeof value === 'string' ? value : '';
   return v.startsWith('/') && !v.startsWith('//') && !v.includes('\\') ? v : undefined;
 }
-
-const PAUSE_OPTIONS: [string, number | undefined][] = [
-  ['30 minutes', 30],
-  ['1 hour', 60],
-  ['4 hours', 240],
-  ['Until I resume', undefined],
-];
 
 export function createWebApp(opts: WebOptions): Hono {
   const { registry, hub, logs, env } = opts;
@@ -202,9 +199,16 @@ export function createWebApp(opts: WebOptions): Hono {
   app.use('*', csrf());
 
   // ---- overview and app settings ------------------------------------------------------------
-  const dashboard = (c: Context) => <Dashboard registry={registry} hub={hub} logs={logs} history={opts.history} origin={origin(c)} dismissedAt={dismissedAt} />;
-  app.get('/', (c) => c.html(<Layout title="Overview">{dashboard(c)}</Layout>));
-  app.get('/partials/dashboard', (c) => c.html(dashboard(c)));
+  const dashboardProps = (c: Context) => ({
+    registry,
+    hub,
+    logs,
+    history: opts.history,
+    origin: origin(c),
+    dismissedAt,
+  });
+  app.get('/', (c) => c.html(<OverviewPage {...dashboardProps(c)} />));
+  app.get('/partials/dashboard', (c) => c.html(<Dashboard {...dashboardProps(c)} />));
   app.get('/partials/publishing', (c) => c.html(<PublishingCard pause={opts.controls?.pauseInfo()} available={!!opts.controls} />));
   app.post('/attention/dismiss', async (c) => {
     const form = await c.req.parseBody();
@@ -214,9 +218,21 @@ export function createWebApp(opts: WebOptions): Hono {
     await opts.preferences?.set({ ...opts.preferences.get(), attentionDismissedAt: dismissedAt });
     return c.redirect('/');
   });
-  app.get('/timeline', (c) => c.html(<Layout title="Timeline"><div class="page-header"><h1>Timeline</h1></div><section class="card stub"><Icon name="activity" size={36} /><h2>Your activity, over time</h2><p class="muted">Activity history is being recorded. The timeline view is coming next. Today’s totals and history feeds are available on the Overview.</p><a class="btn" href="/">Back to Overview</a></section></Layout>));
-  app.get('/settings', (c) => c.html(<Layout title="Settings"><div class="page-header"><h1>Settings</h1></div>{c.req.query('notice') && <Notice kind="ok">{c.req.query('notice') === 'regenerated' ? 'New feed links created. Previous links no longer work.' : 'Settings saved.'}</Notice>}<div class="plugin-grid"><div><section class="card"><div class="flex items-center gap-3 mb-3"><span class="hub-icon"><Icon name="hub" size={18} /></span><h2>Hub rules</h2></div><p class="muted small">Choose how paused media and quiet hours affect your activity.</p><a class="btn mt-4" href="/settings/hub">Edit Hub rules</a></section><form class="card" action="/settings/history" method="post"><h2>History retention</h2><p class="muted small mt-1">Activity stays on this server. Older completed segments are deleted automatically.</p><label class="mt-4" for="retention">Keep history for (days)</label><input id="retention" name="retentionDays" type="number" min="1" max="3650" value={registry.historyRetention()} required /><button class="btn primary mt-4">Save retention</button></form>{opts.history && <section class="card"><h2>Feed access</h2><p class="muted small mt-1">Anyone with a feed link can read your history. Regenerating links revokes the old ones.</p><form method="post" action="/settings/feeds/regenerate" class="mt-4"><button class="btn"><Icon name="restart" size={15} />Regenerate links</button></form></section>}</div><aside class="aside-column"><FeedsCard history={opts.history} origin={origin(c)} /></aside></div></Layout>));
-  const hubSettings = (c: Context, extra?: { errors?: Record<string, string>; values?: Record<string, unknown> }) => c.html(<Layout title="Hub rules"><div class="breadcrumb"><a href="/settings">Settings</a><span>/</span><span>Hub rules</span></div><div class="page-header"><h1>Hub rules</h1></div>{c.req.query('notice') && <Notice kind="ok">Rules saved.</Notice>}{extra?.errors && <Notice kind="error">Some rules are invalid; see below.</Notice>}<div class="max-w-3xl"><HubSettings registry={registry} {...extra} /></div></Layout>);
+  app.get('/timeline', (c) => c.html(<TimelinePage />));
+  app.get('/settings', (c) => c.html(
+    <SettingsPage
+      registry={registry}
+      history={opts.history}
+      origin={origin(c)}
+      notice={c.req.query('notice')}
+    />,
+  ));
+  const hubSettings = (
+    c: Context,
+    extra?: { errors?: Record<string, string>; values?: Record<string, unknown> },
+  ) => c.html(
+    <HubRulesPage registry={registry} notice={c.req.query('notice')} {...extra} />,
+  );
   app.get('/settings/hub', (c) => hubSettings(c));
   app.post('/settings/hub', async (c) => {
     const form = await c.req.parseBody({ all: true });
@@ -237,11 +253,15 @@ export function createWebApp(opts: WebOptions): Hono {
     opts.history.regenerateToken();
     return c.redirect('/settings?notice=regenerated');
   });
-  app.get('/log', (c) => c.html(<Layout title="Log"><div class="page-header"><h1>Log</h1><span class="small muted">Recent events from every source and output</span></div><div class="card log-table-wrapper"><LogTable entries={logs.recent(500)} /></div></Layout>));
+  app.get('/log', (c) => c.html(<LogPage entries={logs.recent(500)} />));
   app.get('/instances/new', (c) => {
     const kind = c.req.query('kind') === 'output' ? 'output' : 'source';
-    const addable = registry.plugins().filter((p) => p.kind === kind && (p.multiple || !registry.list().some((v) => v.config.plugin === p.id)));
-    return c.html(<Layout title={`Add ${kind}`}><div class="breadcrumb"><a href="/">Overview</a><span>/</span><span>Add {kind}</span></div><div class="page-header"><h1>Add {kind}</h1></div><div class="max-w-2xl">{addable.length ? addable.map((plugin) => <form class="card flex items-center gap-4" method="post" action="/instances"><PluginIcon plugin={plugin.id} /><div class="flex-1"><h2>{plugin.name}</h2><p class="muted small mt-1">{plugin.description}</p></div><button class="btn" name="plugin" value={plugin.id}><Icon name="plus" size={15} />Add</button></form>) : <section class="card"><p class="muted">All available {kind}s have been added.</p><a href="/">Back to Overview</a></section>}</div></Layout>);
+    const addable = registry.plugins().filter((plugin) => (
+      plugin.kind === kind && (
+        plugin.multiple || !registry.list().some((view) => view.config.plugin === plugin.id)
+      )
+    ));
+    return c.html(<AddInstancePage kind={kind} plugins={addable} />);
   });
   app.post('/instances/reorder', async (c) => {
     try {
@@ -267,45 +287,29 @@ export function createWebApp(opts: WebOptions): Hono {
       const id = await registry.add(String(form.plugin ?? ''));
       return c.redirect(`/instances/${id}?notice=added`);
     } catch (err) {
-      return c.html(
-        <Layout title="Add">
-          <Notice kind="error">{(err as Error).message}</Notice>
-          <a href="/">Back</a>
-        </Layout>,
-        400,
-      );
+      return c.html(<ErrorPage title="Add" message={(err as Error).message} />, 400);
     }
   });
 
-  const instancePage = (c: Context, view: InstanceView, extra?: { errors?: Record<string, string>; values?: Record<string, unknown>; rulesValues?: Partial<HubRules> }) => {
+  const instancePage = (c: Context, view: InstanceView, extra?: InstancePageValues) => {
     const id = view.config.id;
-    const pagePath = `/instances/${id}`;
-    const props: PanelProps = { pagePath, origin: origin(c) };
-    const notice = NOTICES[c.req.query('notice') ?? ''] ?? c.req.query('message');
-    const error = c.req.query('error');
-    const plugin = view.plugin;
-    const labelField = <div class="field"><label for="instance-label" class="field-label">Label</label><input id="instance-label" type="text" name="label" value={view.config.label ?? ''} placeholder={plugin?.name} /></div>;
-    const labelGroup = plugin?.id === 'tautulli' ? 'Connection' : plugin?.id === 'discord' ? 'Discord application' : 'Settings';
-    const outputRules = plugin?.kind === 'output' ? <OutputRulesCard registry={registry} view={view} values={extra?.rulesValues} error={extra?.errors?._rules} /> : undefined;
-    const saveMessage = plugin?.kind === 'output' ? 'Saving reconnects this output.' : 'Saving restarts this source.';
-    return c.html(<Layout title={view.label}>
-      <div class="breadcrumb"><a href="/">Overview</a><span>/</span><span>{plugin?.kind === 'output' ? 'Outputs' : 'Sources'}</span><span>/</span><span>{view.label}</span></div>
-      <div class="page-header plugin-heading"><div class="plugin-title"><PluginIcon plugin={view.config.plugin} large /><div><div class="plugin-title-line"><h1>{view.label}</h1><span hx-get={`${pagePath}/status`} hx-trigger="every 3s" hx-swap="innerHTML"><Health health={view.status.health} message={view.status.message} pill /></span></div><p>{plugin?.kind === 'output' ? 'Output' : 'Source'} · {plugin?.name ?? view.config.plugin} · <code>{id}</code>{plugin?.kind === 'source' && ` · priority ${registry.sources().findIndex((source) => source.id === id) + 1}`}</p></div></div><div class="actions top">
-        {view.live && (plugin?.id === 'discord' ? <form method="post" action={`${view.routeBase}/resend`}><button class="btn"><Icon name="send" size={15} />Re-send now</button></form> : ['tautulli', 'jellyfin', 'steam', 'scrobbler', 'trakt'].includes(plugin?.id ?? '') && <form method="post" action={`${view.routeBase}/test`}><input name="return" type="hidden" value={pagePath} /><button class="btn"><Icon name="zap" size={15} />Test connection</button></form>)}
-        <form method="post" action={`${pagePath}/restart`}><button class="btn"><Icon name="restart" size={15} />Restart</button></form><div class="btn"><span>Enabled</span><ToggleForm view={view} returnTo={pagePath} /></div><details class="menu"><summary class="btn icon-only" aria-label="More actions"><Icon name="ellipsis" /></summary><div class="menu-popover"><form method="post" action={`${pagePath}/remove`}><button class="btn danger"><Icon name="trash" size={15} />Remove {plugin?.kind ?? 'instance'}</button></form></div></details>
-      </div></div>
-      {notice && <Notice kind="ok">{notice}</Notice>}{error && <Notice kind="error">{error}</Notice>}{extra?.errors && <Notice kind="error">Some settings are invalid; see below.</Notice>}
-      <div class="plugin-grid"><div>{view.live?.instance.panel?.(props)}{plugin && <form class="settings-form" method="post" action={`${pagePath}/settings`} data-save-message={saveMessage}>
-        <SettingsFields schema={plugin.configSchema} values={extra?.values ?? effectiveConfig(view)} errors={extra?.errors} previewUrl={plugin.id === 'tautulli' && view.live ? `${view.routeBase}/template-preview` : undefined} context={view.live?.instance.formContext?.(props)} groupExtras={{ [labelGroup]: labelField }} afterGroups={plugin.id === 'discord' ? { 'When to show': outputRules } : undefined} />
-        {plugin.kind === 'output' && plugin.id !== 'discord' && outputRules}
-        <SaveBar message={saveMessage} />
-      </form>}</div><aside class="aside-column" hx-get={`${pagePath}/live`} hx-trigger="every 3s" hx-swap="innerHTML"><LiveBlock view={view} props={props} entries={logs.recent(6, id)} /></aside></div>
-    </Layout>);
+    return c.html(
+      <InstancePage
+        registry={registry}
+        view={view}
+        panelProps={{ pagePath: `/instances/${id}`, origin: origin(c) }}
+        entries={logs.recent(6, id)}
+        notice={NOTICES[c.req.query('notice') ?? ''] ?? c.req.query('message')}
+        error={c.req.query('error')}
+        {...extra}
+        values={extra?.values ?? effectiveConfig(view)}
+      />,
+    );
   };
 
   const withView = (handler: (c: Context, view: InstanceView) => Response | Promise<Response>) => (c: Context) => {
     const view = registry.get(c.req.param('id') ?? '');
-    if (!view) return c.html(<Layout title="Not found"><Notice kind="error">No such instance.</Notice><a href="/">Back</a></Layout>, 404);
+    if (!view) return c.html(<ErrorPage title="Not found" message="No such instance." />, 404);
     return handler(c, view);
   };
 
@@ -313,7 +317,13 @@ export function createWebApp(opts: WebOptions): Hono {
   app.get('/instances/:id/status', withView((c, view) => c.html(<Health health={view.status.health} message={view.status.message} pill />)));
   app.get(
     '/instances/:id/live',
-    withView((c, view) => c.html(<LiveBlock view={view} props={{ pagePath: `/instances/${view.config.id}`, origin: origin(c) }} entries={logs.recent(6, view.config.id)} />)),
+    withView((c, view) => c.html(
+      <InstanceLiveBlock
+        view={view}
+        props={{ pagePath: `/instances/${view.config.id}`, origin: origin(c) }}
+        entries={logs.recent(6, view.config.id)}
+      />,
+    )),
   );
   app.post(
     '/instances/:id/settings',
@@ -402,30 +412,12 @@ export function createWebApp(opts: WebOptions): Hono {
   // ---- plugin routes ---------------------------------------------------------------------------
   app.all('/plugins/:id/*', (c) => {
     const view = registry.get(c.req.param('id'));
-    if (!view?.live) return c.html(<Layout title="Unavailable"><Notice kind="error">This instance isn't running. Enable it first.</Notice><a href="/">Back</a></Layout>, 404);
+    if (!view?.live) return c.html(
+      <ErrorPage title="Unavailable" message="This instance isn't running. Enable it first." />,
+      404,
+    );
     return view.live.app.fetch(c.req.raw);
   });
 
   return app;
-}
-
-function LiveBlock({ view, props, entries }: { view: InstanceView; props: PanelProps; entries: LogEntry[] }) {
-  return <>{view.live?.instance.live?.(props) ?? <section class="card"><h2>Live status</h2><p class="mt-3"><Health health={view.status.health} message={view.status.message} /></p>{view.status.lastSuccessAt && <p class="muted small">Last success {timeAgo(view.status.lastSuccessAt)}</p>}</section>}<RecentEvents entries={entries} /></>;
-}
-
-function LogTable(props: { entries: LogEntry[] }) {
-  if (!props.entries.length) return <p class="muted">Nothing logged yet.</p>;
-  return (
-    <table class="log">
-      <tbody>
-        {props.entries.map((e) => (
-          <tr class={`lvl-${e.level}`}>
-            <td title={new Date(e.at).toISOString()}>{timeAgo(e.at)}</td>
-            <td>{e.scope}</td>
-            <td>{e.message}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
 }

@@ -60,6 +60,14 @@ Source and implementation were rendered together in each comparison input, rathe
 
 Capture failures caused by restarting the fixture server and previously cached CSS were discarded. They are preview troubleshooting, not accepted QA evidence.
 
+4. Follow-up totals, rules, and readability review: passed.
+   - Watching, listening, and playing now union non-paused source intervals per kind. Duplicate Plex/Trakt observations followed by paused media count as 10 active minutes; paused activity confirmed by an output still counts toward Displayed.
+   - Output summaries use the same effective values as their editable fields. Each field identifies inheritance or an explicit override, including empty quiet hours and overrides equal to the Hub value.
+   - Page rendering lives in `src/web/pages/`, with shared activity, history, events, instance actions, page headers, rules, and save-bar components in `src/web/components/`. The extraction preserved HTML and response status across 15 routes.
+   - A fresh isolated preview at http://localhost:8088/instances/discord used Hub quiet hours 23:00–07:00 and partial output overrides (`paused: show`, `quietHours: ''`). Both summary and fields showed Show / Off / America/Chicago; priority and time zone were labeled inherited.
+   - Desktop evidence: /share/userHome/quiver/.t3/userdata/browser-artifacts/browser-screenshot-localhost-mv35hfv9-d48bf684.png — 1280 × 800 pixels. Mobile evidence: /share/userHome/quiver/.t3/userdata/browser-artifacts/browser-screenshot-localhost-mv35iaay-d5ec3d3c.png — 720 × 1600 pixels at a 360 × 800 CSS viewport. The mobile card measured x=16..344; document and viewport widths were both 360 pixels. No console errors or failed network requests appeared.
+   - Full suite: 248 tests across 20 files passed. Typecheck, production build, and diff check passed.
+
 **Required fidelity surfaces**
 
 - Fonts and typography: Geist and Geist Mono load locally; browser font checks passed. Heading weight, compact labels, monospace timestamps/templates, and wrapped helper copy were inspected in the focused comparisons. The user explicitly requested these fonts; no external font requests are used.
@@ -101,4 +109,3 @@ Capture failures caused by restarting the fixture server and previously cached C
 - [x] Residual differences and test limits documented.
 
 final result: passed
-
