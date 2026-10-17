@@ -1,8 +1,11 @@
 import { describeActivity, type NowPlaying } from '../../core/activity.js';
 import type { Hub } from '../../core/hub.js';
+import type { PluginKind } from '../../core/plugin.js';
 import type { InstanceView } from '../../core/registry.js';
 import { Icon, PluginIcon } from '../icons.js';
 import { Health, timeAgo } from '../layout.js';
+
+export const KIND_NOUNS: Record<PluginKind, string> = { source: 'source', history: 'history source', output: 'output' };
 
 export function ToggleForm({
   view,
@@ -86,7 +89,9 @@ function InstanceRow({
   const description = enabled
     ? activity
       ? `${activity.title}${activity.subtitle ? ` · ${activity.subtitle}` : ''}`
-      : kind === 'source' ? 'Not playing anything' : view.status.message
+      : kind === 'source' ? 'Not playing anything'
+        : view.plugin?.kind === 'output' && view.plugin.publishes === 'history' ? 'Publishes your history at a secret link'
+        : view.status.message
     : 'Not checking';
   const lastSuccess = view.status.lastSuccessAt;
 
@@ -160,6 +165,38 @@ export function InstanceList({
   );
 }
 
+/** History sources only add to history, so they sit apart from the Sources → Hub → Outputs flow. */
+export function HistorySourceList({ views }: { views: InstanceView[] }) {
+  return (
+    <section class="card flush history-sources">
+      <div class="card-header">
+        <div>
+          <h2>History sources</h2>
+          <p class="muted small">Add past activity to your Calendar. Outputs never show it live.</p>
+        </div>
+        <a href="/instances/new?kind=history" class="small font-semibold">+ Add</a>
+      </div>
+      {views.length ? views.map((view) => (
+        <div class={`compact-row ${view.config.enabled ? '' : 'off'}`} data-instance-id={view.config.id}>
+          <PluginIcon plugin={view.config.plugin} />
+          <div class="min-w-0">
+            <a class="instance-name" href={`/instances/${view.config.id}`}>{view.label}</a>
+            <div class="instance-sub" title={view.status.message}>
+              <Health health={view.config.enabled ? view.status.health : 'idle'} message={view.config.enabled ? view.status.message : 'Off'} />
+            </div>
+          </div>
+          <ToggleForm view={view} />
+        </div>
+      )) : (
+        <div class="empty-state">
+          Import calendar events, or record games Discord sees you playing.{' '}
+          <a href="/instances/new?kind=history">Add a history source</a>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function InstanceActions({
   view,
   pagePath,
@@ -185,9 +222,11 @@ export function InstanceActions({
           </form>
         )
       )}
-      <form method="post" action={`${pagePath}/restart`}>
-        <button class="btn"><Icon name="restart" size={15} />Restart</button>
-      </form>
+      {!(plugin?.kind === 'output' && plugin.publishes === 'history') && (
+        <form method="post" action={`${pagePath}/restart`}>
+          <button class="btn"><Icon name="restart" size={15} />Restart</button>
+        </form>
+      )}
       <div class="btn">
         <span>Enabled</span>
         <ToggleForm view={view} returnTo={pagePath} />
@@ -195,10 +234,16 @@ export function InstanceActions({
       <details class="menu">
         <summary class="btn icon-only" aria-label="More actions"><Icon name="ellipsis" /></summary>
         <div class="menu-popover">
-          <form method="post" action={`${pagePath}/remove`}>
+          <form
+            method="post"
+            action={`${pagePath}/remove`}
+            data-confirm={plugin?.kind === 'history'
+              ? `Remove ${view.label}? Everything it added to your history is deleted too.`
+              : `Remove ${view.label}? Its settings are deleted; recorded history stays.`}
+          >
             <button class="btn danger">
               <Icon name="trash" size={15} />
-              Remove {plugin?.kind ?? 'instance'}
+              Remove {plugin ? KIND_NOUNS[plugin.kind] : 'instance'}
             </button>
           </form>
         </div>

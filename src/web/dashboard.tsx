@@ -3,8 +3,8 @@ import type { Hub, HubRules, HubState } from '../core/hub.js';
 import type { LogBuffer, LogEntry } from '../core/log.js';
 import type { InstanceView, Registry } from '../core/registry.js';
 import { ActivityCard } from './components/activity.js';
-import { FeedsCard, TodayCard } from './components/history.js';
-import { InstanceList } from './components/instances.js';
+import { TodayCard } from './components/history.js';
+import { HistorySourceList, InstanceList } from './components/instances.js';
 import { PageHeader } from './components/page.js';
 import { pausedMediaLabels, RuleRow } from './components/rules.js';
 import { Icon } from './icons.js';
@@ -13,7 +13,7 @@ import { timeAgo } from './layout.js';
 // Preserve the existing imports while the reusable components have dedicated modules.
 export { ActivityCard } from './components/activity.js';
 export { RecentEvents } from './components/events.js';
-export { durationLabel, FeedsCard } from './components/history.js';
+export { durationLabel } from './components/history.js';
 export { ToggleForm } from './components/instances.js';
 
 export interface DashboardProps {
@@ -21,7 +21,6 @@ export interface DashboardProps {
   hub: Hub;
   logs: LogBuffer;
   history?: HistoryStore;
-  origin: string;
   dismissedAt?: number;
 }
 
@@ -30,7 +29,6 @@ export function Dashboard({
   hub,
   logs,
   history,
-  origin,
   dismissedAt = 0,
 }: DashboardProps) {
   const views = registry.list();
@@ -71,7 +69,7 @@ export function Dashboard({
         </div>
         <aside class="aside-column">
           <TodayCard stats={history?.today(rules.timeZone)} />
-          <FeedsCard history={history} origin={origin} />
+          <HistorySourceList views={views.filter((view) => view.plugin?.kind === 'history')} />
           <NeedsAttentionCard issues={issues} recentWarnings={recentWarnings} />
         </aside>
       </div>

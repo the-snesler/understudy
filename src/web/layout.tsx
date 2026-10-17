@@ -13,14 +13,14 @@ declare module 'hono' {
 export function Layout(props: { title: string; children: Child; bare?: boolean; section?: string }) {
   const context = tryGetContext();
   const signedIn = context?.get('signedIn');
-  const section = props.section ?? (props.title === 'Log' ? 'log' : props.title === 'Settings' || props.title === 'Hub rules' ? 'settings' : props.title === 'Timeline' ? 'timeline' : 'overview');
+  const section = props.section ?? (props.title === 'Log' ? 'log' : props.title === 'Settings' || props.title === 'Hub rules' ? 'settings' : props.title === 'Calendar' ? 'calendar' : 'overview');
   return <>{raw('<!DOCTYPE html>')}<html lang="en"><head>
     <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{`${props.title} · Understudy`}</title><link rel="icon" href="/favicon.svg" type="image/svg+xml" /><link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="stylesheet" href="/assets/app.css" /><script src="/static/htmx.min.js" defer></script><script src="/assets/sortable.min.js" defer></script><script src="/assets/ui.js" defer></script>
   </head><body class={props.bare ? 'bare-layout' : ''}>
     <aside class="sidebar"><a class="brand" href="/">{raw(ICON_INLINE)}<span>Understudy</span></a>
-      {!props.bare && <><nav aria-label="Main navigation">{[['overview', '/', 'Overview'], ['timeline', '/timeline', 'Timeline'], ['log', '/log', 'Log'], ['settings', '/settings', 'Settings']].map(([key, href, label]) => <a href={href} class={`nav-item ${section === key ? 'active' : ''}`} aria-current={section === key ? 'page' : undefined}><Icon name={key!} /><span>{label}</span></a>)}</nav><div class="mobile-publishing" hx-get="/partials/publishing" hx-trigger="every 3s" hx-swap="innerHTML"><PublishingCard pause={context?.get('pauseInfo')} available={!!context?.get('hasControls')} /></div>
+      {!props.bare && <><nav aria-label="Main navigation">{[['overview', '/', 'Overview'], ['calendar', '/calendar', 'Calendar'], ['log', '/log', 'Log'], ['settings', '/settings', 'Settings']].map(([key, href, label]) => <a href={href} class={`nav-item ${section === key ? 'active' : ''}`} aria-current={section === key ? 'page' : undefined}><Icon name={key!} /><span>{label}</span></a>)}</nav><div class="mobile-publishing" hx-get="/partials/publishing" hx-trigger="every 3s" hx-swap="innerHTML"><PublishingCard pause={context?.get('pauseInfo')} available={!!context?.get('hasControls')} /></div>
         <div class="sidebar-bottom"><div hx-get="/partials/publishing" hx-trigger="every 3s" hx-swap="innerHTML"><PublishingCard pause={context?.get('pauseInfo') as PauseInfo | undefined} available={!!context?.get('hasControls')} /></div>
           {signedIn && <form method="post" action="/logout" class="logout"><button class="btn text"><Icon name="logout" size={16} />Log out</button></form>}</div></>}
     </aside><main class="main">{props.children}</main>

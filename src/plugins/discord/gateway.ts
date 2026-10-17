@@ -21,7 +21,7 @@ export interface GatewaySession {
   session_id: string;
   status: string;
   client_info?: { client?: string; os?: string; version?: number };
-  activities?: { type?: number; name?: string }[];
+  activities?: { type?: number; name?: string; details?: string; state?: string; application_id?: string }[];
   active?: boolean;
 }
 

@@ -21,6 +21,7 @@ import {
   type TokenSet,
 } from './oauth.js';
 import { Publisher, type PresenceGate, type PublishedState } from './publisher.js';
+import { discordStatusWatched, notifyDiscordStatus, provideDiscordStatus } from './status-bus.js';
 
 const WHEN = { title: 'When to show', description: 'Keep Discord in step with whether you’re actually on it.' };
 const APPLICATION = { title: 'Discord application', description: 'The app in Discord’s Developer Portal that Understudy signs in through.' };
@@ -134,7 +135,10 @@ function createDiscord(ctx: OutputContext<Config>) {
     token: () => tokens.accessToken(),
     refreshToken: () => tokens.forceRefresh(),
     log: log.child(`${ctx.instanceId}/gateway`),
-    onChange: () => publisher.kick(),
+    onChange: () => {
+      publisher.kick();
+      notifyDiscordStatus();
+    },
     previousSessionIds: () => read().gatewaySessions ?? [],
     onSessionId: (id) => {
       const ids = [...(read().gatewaySessions ?? []).filter((x) => x !== id), id].slice(-10);
@@ -152,8 +156,9 @@ function createDiscord(ctx: OutputContext<Config>) {
       return onlineCheck(gateway.sessions, gateway.ownSessionIds, config.onlineStatuses);
     },
   };
+  // The Gateway also feeds the Discord status history source; it stays invisible unless publishing.
   const syncGateway = () => {
-    if (config.onlyWhenOnline && connected()) gateway.start();
+    if ((config.onlyWhenOnline || discordStatusWatched()) && connected()) gateway.start();
     else if (gateway.state !== 'stopped') gateway.stop();
   };
 
@@ -206,10 +211,25 @@ function createDiscord(ctx: OutputContext<Config>) {
   }
 
   const pagePath = `/instances/${ctx.instanceId}`;
+  let unprovide: (() => void) | undefined;
 
   return {
     start() {
       publisher.start();
+      unprovide = provideDiscordStatus({
+        instanceId: ctx.instanceId,
+        sync: () => {
+          if (!ctx.signal.aborted) syncGateway();
+        },
+        snapshot: () => ({
+          connected: connected(),
+          informed: gateway.informed,
+          gatewayState: gateway.state,
+          ...(gateway.lastError ? { lastError: gateway.lastError } : {}),
+          applicationId: config.applicationId,
+          sessions: realSessions(gateway.sessions, gateway.ownSessionIds),
+        }),
+      });
       syncGateway();
       // Switched from headless mode: withdraw what that left behind (as far as Discord allows).
       if (config.onlyWhenOnline && headless.active && connected()) {
@@ -223,6 +243,7 @@ function createDiscord(ctx: OutputContext<Config>) {
         log.warn(`Could not withdraw the activity: ${errorMessage(err)}`);
       }
       gateway.stop();
+      unprovide?.();
     },
     onState(s: Parameters<Publisher['onState']>[0]) {
       publisher.onState(s);

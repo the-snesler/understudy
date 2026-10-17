@@ -1,8 +1,6 @@
-import type { DailyStats, HistoryStore } from '../../core/history.js';
-import { historyFeedUrls } from '../history.js';
-import { Icon } from '../icons.js';
+import type { DailyStats } from '../../core/history.js';
 
-const CATEGORIES = [
+export const CATEGORIES = [
   ['watching', 'Watching'],
   ['listening', 'Listening'],
   ['playing', 'Playing'],
@@ -23,7 +21,7 @@ export function TodayCard({ stats }: { stats?: DailyStats }) {
     <section class="card">
       <div class="flex justify-between items-center">
         <h2>Today</h2>
-        <a class="small" href="/timeline">Timeline</a>
+        <a class="small" href="/calendar">Calendar</a>
       </div>
       <div class="stats-bar" role="img" aria-label="Today's activity by kind">
         {CATEGORIES.slice(0, 3).map(([key]) => (
@@ -48,62 +46,6 @@ export function TodayCard({ stats }: { stats?: DailyStats }) {
         ))}
       </div>
       {!stats && <p class="muted small mt-4">History recording is not available.</p>}
-    </section>
-  );
-}
-
-function FeedLink({
-  label,
-  path,
-  url,
-  icon,
-}: {
-  label: string;
-  path: string;
-  url: string;
-  icon: string;
-}) {
-  return (
-    <div class="feed-item">
-      <Icon name={icon} size={18} />
-      <div>
-        <strong class="small">{label}</strong>
-        <code>{path}</code>
-      </div>
-      <button
-        type="button"
-        class="btn"
-        data-copy={url}
-        aria-label={`Copy ${label} feed link`}
-      >
-        <Icon name="copy" size={14} />
-        Copy
-      </button>
-    </div>
-  );
-}
-
-export function FeedsCard({
-  history,
-  origin,
-}: {
-  history?: HistoryStore;
-  origin: string;
-}) {
-  const urls = history && historyFeedUrls(origin, history.token());
-
-  return (
-    <section class="card">
-      <h2>History feeds</h2>
-      <p class="muted small mt-1">For calendars, bots and scripts.</p>
-      {urls ? (
-        <>
-          <FeedLink label="Calendar" path="/feed/history.ics" url={urls.calendar} icon="calendar" />
-          <FeedLink label="JSON" path="/api/history.json" url={urls.json} icon="activity" />
-        </>
-      ) : (
-        <p class="muted small mt-4">Enable history storage to create feed links.</p>
-      )}
     </section>
   );
 }

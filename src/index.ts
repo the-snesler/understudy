@@ -24,6 +24,7 @@ const hub = new Hub();
 const registry = new Registry({ plugins, config, state, hub, log, env: { publicUrl, dataDir } });
 const history = new HistoryStore(path.join(dataDir, 'history.sqlite'), { retentionDays: registry.historyRetention() });
 hub.attachHistory(history);
+registry.attachHistory(history);
 
 // Before the instances start, so outputs see a saved pause from the first state they get.
 const controls = new Controls(new ScopedState(state, '_app'), hub, log.child('app'));

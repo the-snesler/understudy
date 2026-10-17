@@ -6,7 +6,10 @@ import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NowPlaying, SourceActivity } from '../src/core/activity.js';
 import { HistoryStore, unionDuration, zonedDayBounds } from '../src/core/history.js';
-import { foldCalendarLine, historyCalendar, historyFeedUrls, registerHistoryRoutes } from '../src/web/history.js';
+import type { HistoryReader } from '../src/core/plugin.js';
+import { groupSegments } from '../src/core/timeline.js';
+import { historyCalendar } from '../src/plugins/feeds/calendar.js';
+import { foldCalendarLine } from '../src/plugins/feeds/ics.js';
 
 const stores: HistoryStore[] = [];
 const dirs: string[] = [];
@@ -121,20 +124,71 @@ describe('persistent activity history', () => {
     expect(() => store.setRetention(0)).toThrow(/positive whole/);
   });
 
-  it('creates private SQLite files and persists the feed token', () => {
+  it('creates private SQLite files and migrates version 0 databases, keeping the old feed token', () => {
     const database = file();
-    const first = history(() => 100, database);
-    const token = first.token();
-    first.close();
-    const second = history(() => 200, database);
+    const old = new DatabaseSync(database);
+    old.exec(`
+      CREATE TABLE history_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+      CREATE TABLE history_segments (
+        id TEXT PRIMARY KEY, source_id TEXT NOT NULL, output_id TEXT, activity_key TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('playing', 'watching', 'listening')), title TEXT NOT NULL, subtitle TEXT,
+        started_at INTEGER NOT NULL, ended_at INTEGER, paused INTEGER NOT NULL CHECK (paused IN (0, 1))
+      ) STRICT;
+      CREATE UNIQUE INDEX history_open_source ON history_segments(source_id) WHERE ended_at IS NULL AND output_id IS NULL;
+      INSERT INTO history_meta VALUES ('feed_token', 'legacy-token'), ('last_seen', '150');
+      INSERT INTO history_segments VALUES ('old', 'plex', NULL, 'm', 'watching', 'Old movie', NULL, 100, NULL, 0);
+    `);
+    old.close();
+    const store = history(() => 200, database);
     expect(fs.statSync(database).mode & 0o777).toBe(0o600);
-    expect(second.token()).toBe(token);
-    expect(second.validToken(token)).toBe(true);
-    const next = second.regenerateToken();
-    expect(next).not.toBe(token);
-    expect(second.validToken(token)).toBe(false);
-    expect(second.validToken(undefined)).toBe(false);
-    expect(second.validToken(next)).toBe(true);
+    expect(store.legacyFeedToken()).toBe('legacy-token');
+    expect(store.query()).toEqual([expect.objectContaining({ id: 'old', endedAt: 150 })]);
+    // The new kind is accepted after the migration.
+    store.importEntries('ical', 'calendar', { from: 0, to: 300 }, [{ uid: 'e', title: 'Lecture', startedAt: 160, endedAt: 190 }]);
+    expect(store.query({ sourceId: 'ical' })).toEqual([expect.objectContaining({ kind: 'event', origin: 'calendar' })]);
+    expect(history(() => 300).legacyFeedToken()).toBeUndefined();
+  });
+
+  it('keeps several observations open per history source and ends only those that disappear', () => {
+    let now = 1_000;
+    const store = history(() => now);
+    const game = { key: 'game', kind: 'playing' as const, title: 'Hades II' };
+    const song = { key: 'song', kind: 'listening' as const, title: 'Song', subtitle: 'Artist' };
+    store.observe('discord-status', 'discord', [game, song]);
+    now = 2_000;
+    store.observe('discord-status', 'discord', [game]);
+    now = 3_000;
+    store.observe('discord-status', 'discord', [game]);
+    store.recordSource('plex', activity());
+    expect(store.query({ sourceId: 'discord-status' }).map((item) => [item.title, item.startedAt, item.endedAt, item.origin]).sort())
+      .toEqual([['Hades II', 1_000, null, 'discord'], ['Song', 1_000, 2_000, 'discord']]);
+    expect(store.query({ scope: 'source', excludeOrigins: ['discord'] }).map((item) => item.sourceId)).toEqual(['plex']);
+    expect(store.today('UTC', 3_000).playing).toBe(2_000);
+    store.close(4_000);
+  });
+
+  it('imports entries idempotently, updating in place and removing those gone from the window', () => {
+    const now = 10 * 86_400_000;
+    const store = history(() => now, ':memory:', 5);
+    const window = { from: 0, to: now };
+    const first = store.importEntries('ical', 'calendar', window, [
+      { uid: 'a', title: 'Lecture', subtitle: 'Room 1', startedAt: now - 3_600_000, endedAt: now - 1_800_000 },
+      { uid: 'b', title: 'Gym', startedAt: now - 7_200_000, endedAt: now - 6_000_000 },
+      { uid: 'old', title: 'Too old', startedAt: 1_000, endedAt: 2_000 },
+    ]);
+    expect(first).toEqual({ added: 2, updated: 0, removed: 0 });
+    const id = store.query({ sourceId: 'ical' }).find((item) => item.key === 'a')!.id;
+    expect(store.importEntries('ical', 'calendar', window, [
+      { uid: 'a', title: 'Lecture (moved)', startedAt: now - 3_000_000, endedAt: now - 1_000_000 },
+    ])).toEqual({ added: 0, updated: 1, removed: 1 });
+    expect(store.query({ sourceId: 'ical' })).toEqual([expect.objectContaining({ id, title: 'Lecture (moved)', kind: 'event' })]);
+    expect(store.importEntries('ical', 'calendar', window, [
+      { uid: 'a', title: 'Lecture (moved)', startedAt: now - 3_000_000, endedAt: now - 1_000_000 },
+    ])).toEqual({ added: 0, updated: 0, removed: 0 });
+    expect(store.today('UTC', now)).toMatchObject({ watching: 0, listening: 0, playing: 0 });
+    expect(store.latest('ical', 5).map((item) => item.key)).toEqual(['a']);
+    expect(store.deleteSource('ical')).toBe(1);
+    expect(store.hasAny()).toBe(false);
   });
 
   it('returns intervals overlapping a query window rather than only those starting inside it', () => {
@@ -267,51 +321,84 @@ describe('daily totals', () => {
   });
 });
 
-describe('public history feeds', () => {
-  it('requires the URL token, rotates links, and bypasses subsequent UI password middleware', async () => {
-    let now = 1_000;
-    const store = history(() => now);
-    store.recordSource('plex', activity());
-    store.recordShown('discord', shown());
-    now = 10_000;
-    const app = new Hono();
-    registerHistoryRoutes(app, store, { timeZone: () => 'America/Chicago', now: () => now });
-    app.use('*', async (c) => c.text('UI password needed', 401));
-    expect((await app.request('/api/history.json')).status).toBe(401);
-    expect((await app.request('/feed/history.ics?token=wrong')).status).toBe(401);
-    const token = store.token();
-    const json = await app.request(`/api/history.json?token=${token}`);
-    expect(json.status).toBe(200);
-    expect(json.headers.get('cache-control')).toBe('private, no-store');
-    expect(await json.json()).toMatchObject({ generatedAt: 10_000, timeZone: 'America/Chicago', segments: [{ sourceId: 'plex' }], outputSegments: [{ outputId: 'discord' }] });
-    const calendar = await app.request(`/feed/history.ics?token=${token}`);
-    expect(calendar.status).toBe(200);
-    expect(calendar.headers.get('content-type')).toBe('text/calendar; charset=utf-8');
-    expect(await calendar.text()).toContain('BEGIN:VEVENT');
-    expect((await app.request(`/api/history.json?token=${token}&from=bad`)).status).toBe(400);
-    expect((await app.request(`/api/history.json?token=${token}&from=20&to=10`)).status).toBe(400);
-    store.regenerateToken();
-    expect((await app.request(`/api/history.json?token=${token}`)).status).toBe(401);
-    expect(historyFeedUrls('https://example.test/', 'x+y')).toEqual({ calendar: 'https://example.test/feed/history.ics?token=x%2By', json: 'https://example.test/api/history.json?token=x%2By' });
-  });
+function reader(store: HistoryStore, excluded: string[] = []): HistoryReader {
+  return {
+    query: (options = {}) => store.query({ ...options, excludeOrigins: [...(options.excludeOrigins ?? []), ...excluded] }),
+    timeZone: () => 'UTC',
+    label: (id) => ({ plex: 'Plex' } as Record<string, string>)[id] ?? id,
+    legacyFeedToken: () => undefined,
+  };
+}
 
+const FEED = { content: 'activity', kinds: ['watching', 'listening', 'playing'], combine: true, includePaused: false, pastDays: 30, calendarName: 'Understudy' } as const;
+const feed = (overrides: Partial<{ -readonly [K in keyof typeof FEED]: unknown }> = {}) => ({ ...FEED, ...overrides }) as Parameters<typeof historyCalendar>[1];
+
+describe('calendar feed', () => {
   it('retains calendar UIDs as open events finish, escapes text, and folds UTF-8 lines', () => {
     let now = Date.parse('2026-10-10T12:00:00Z');
     const store = history(() => now);
     store.recordSource('plex', activity({ title: 'Movie, part; one\\two\nnext', subtitle: 'é'.repeat(90) }));
     now += 60_000;
-    const open = historyCalendar(store.query(), now);
+    const open = historyCalendar(reader(store), feed(), now);
     const uid = open.match(/UID:([^\r]+)/)?.[1];
     expect(uid).toMatch(/@understudy$/);
     expect(open).toContain('SUMMARY:Movie\\, part\\; one\\\\two\\nnext');
     expect(open).toContain('DTSTART:20261010T120000Z');
     store.recordSource('plex', null);
-    const closed = historyCalendar(store.query(), now);
+    const closed = historyCalendar(reader(store), feed(), now);
     expect(closed).toContain(`UID:${uid}`);
     expect(closed).toContain('DTEND:20261010T120100Z');
     expect(closed).toContain('LAST-MODIFIED:20261010T120100Z');
     for (const line of closed.trimEnd().split('\r\n')) expect(Buffer.byteLength(line)).toBeLessThanOrEqual(75);
     const long = 'DESCRIPTION:' + '🎮'.repeat(60);
     expect(foldCalendarLine(long).replace(/\r\n /g, '')).toBe(long);
+  });
+
+  it('combines back-to-back tracks into one event, leaves out paused time, and never includes calendar imports', () => {
+    let now = Date.parse('2026-10-10T12:00:00Z');
+    const store = history(() => now);
+    for (let index = 1; index <= 3; index++) {
+      store.recordSource('music', activity({ key: `t${index}`, kind: 'listening', title: `Track ${index}`, subtitle: 'Artist' }));
+      now += 180_000;
+    }
+    store.recordSource('music', null);
+    store.recordSource('plex', activity({ paused: true }));
+    now += 60_000;
+    store.recordSource('plex', null);
+    store.importEntries('ical', 'calendar', { from: 0, to: now }, [{ uid: 'x', title: 'Imported lecture', startedAt: now - 60_000, endedAt: now }]);
+    store.observe('discord-status', 'discord', [{ key: 'g', kind: 'playing', title: 'Hades II' }]);
+    now += 60_000;
+    // The registry applies the no-echo rule; a calendar feed's reader leaves out `calendar` origins.
+    const text = historyCalendar(reader(store, ['calendar']), feed(), now);
+    expect(text.match(/BEGIN:VEVENT/g)).toHaveLength(2);
+    expect(text).toContain('SUMMARY:Artist');
+    expect(text).toContain('DESCRIPTION:3 tracks\\nListening · music');
+    expect(text).toContain('SUMMARY:Hades II');
+    expect(text).not.toContain('Imported lecture');
+    expect(text).not.toContain('Paused');
+    const separate = historyCalendar(reader(store, ['calendar']), feed({ combine: false, includePaused: true, kinds: ['listening', 'watching'] }), now);
+    expect(separate.match(/BEGIN:VEVENT/g)).toHaveLength(4);
+    expect(separate).toContain('Paused');
+  });
+});
+
+describe('session grouping', () => {
+  it('merges same-source items within the gap and keeps events and other sources apart', () => {
+    const base = { paused: false, kind: 'watching' as const, key: 'k' };
+    const groups = groupSegments([
+      { ...base, id: '1', sourceId: 'plex', title: 'Show', subtitle: 'S01E01', startedAt: 0, endedAt: 100 },
+      { ...base, id: '2', sourceId: 'plex', title: 'Show', subtitle: 'S01E02', startedAt: 200, endedAt: 300 },
+      { ...base, id: '3', sourceId: 'jellyfin', title: 'Movie', startedAt: 250, endedAt: 400 },
+      { ...base, id: '4', sourceId: 'plex', title: 'Show', subtitle: 'S01E03', startedAt: 10 * 60_000, endedAt: 11 * 60_000 },
+      { ...base, id: '5', sourceId: 'ical', kind: 'event', title: 'A', startedAt: 0, endedAt: 50 },
+      { ...base, id: '6', sourceId: 'ical', kind: 'event', title: 'B', startedAt: 50, endedAt: 60 },
+    ]);
+    expect(groups.map((group) => [group.id, group.title, group.subtitle, group.items.length])).toEqual([
+      ['1', 'Show', '2 episodes', 2],
+      ['5', 'A', undefined, 1],
+      ['6', 'B', undefined, 1],
+      ['3', 'Movie', undefined, 1],
+      ['4', 'Show', 'S01E03', 1],
+    ]);
   });
 });

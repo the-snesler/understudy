@@ -22,11 +22,16 @@ It doesn't need the Discord desktop app on the machine doing the playing.
     Switch 2 games.
   - **Steam**: what you're playing, including on a Steam Deck in Game Mode.
   - **Manual**: set an activity from the web UI.
-- **Output: Discord.**
-  - Only while you're actually on Discord, with your real status.
-  - Uses the Hub’s selected activity, with optional rules for this output.
+- **History sources** (history only; never shown live):
+  - **Calendar (iCal)**: past events from Google, Apple or Outlook calendars.
+  - **Discord status**: what your own Discord clients show, such as games Discord detects on your PC.
+- **Outputs:**
+  - **Discord**: only while you're actually on Discord, with your real status. Uses the Hub’s
+    selected activity, with optional rules for this output.
+  - **Calendar feed** and **JSON feed**: publish your history at a secret link.
 - **Hub:** source priority, paused-media rules, quiet hours, and publishing pause controls.
-- **History:** persistent source and displayed segments, daily totals, and calendar/JSON feeds.
+- **History and Calendar:** everything sources saw and outputs showed, as a week calendar with daily
+  totals.
 - **Web UI** for setup, sign-ins and live status. Settings live in `/data`.
 
 Sources and outputs are plugins, so more can be added (see [Architecture](#architecture)).
@@ -291,7 +296,7 @@ URL, e.g. `1145360` from `store.steampowered.com/app/1145360/`), so only games p
 - **`invalid_scope` when connecting Discord.** Enable the Social SDK for your app (see Discord
   setup).
 
-## Activity history and feeds
+## Activity history and the Calendar
 
 The Overview follows **Sources → Hub → Outputs**. All source activity is recorded, including
 activity that loses priority or is hidden by paused-media and quiet-hour rules. Outputs call
@@ -302,15 +307,58 @@ showing activity do not double-count the time.
 Today’s watching, listening, and playing totals count active time, excluding paused source
 segments and counting overlapping observations once per kind. Intervals are clipped to the local
 day in the Hub’s time zone. Different kinds count independently when they happen at the same
-time. The timeline page is a stub; the underlying history is available through the feeds:
+time.
 
-- `/feed/history.ics?token=…` supplies calendar events with stable UIDs.
-- `/api/history.json?token=…` supplies source and output segments. Optional `from`/`to` query
+The **Calendar** page shows a week at a time in the Hub’s time zone. Back-to-back items from one
+source (an album, a binge, a game night) are combined into one block; a green rail marks when an
+output showed something. Pick a day for its agenda, where combined blocks list every item.
+
+### History sources
+
+History sources copy past or background activity from another service into your history. They
+appear in the Calendar and the totals, but **never feed the Hub**, so no output shows them live.
+They have their own card on the Overview.
+
+- **Calendar (iCal):** paste a calendar's secret iCal address (Google Calendar: Settings → your
+  calendar → *Secret address in iCal format*). Timed events from the last 30 days (adjustable) are
+  imported and kept in step every 30 minutes, including recurring events, moved and cancelled
+  occurrences. All-day events are left out: they aren't time spent on something. Calendar events
+  aren't counted in the watching/listening/playing totals.
+- **Discord status:** records what your own Discord clients show: games Discord detects on your PC,
+  Spotify, and apps with their own Discord status. It uses the Discord output's connection, so
+  connect Discord there first (it works in either Discord mode). Use **Ignore apps** for anything
+  another source already records, such as Spotify when Last.fm is set up.
+
+Removing a history source also deletes what it imported.
+
+### The no-echo rule
+
+**Activity never goes back to the service it came from.**
+
+- Events imported from a calendar never appear in a **Calendar feed**, and Understudy's own feed
+  events are skipped when importing. So you can subscribe to the feed in the same Google Calendar
+  you import, without anything looping.
+- Statuses recorded from Discord never appear on the **Discord** output, and Understudy's own
+  Discord activity is never recorded as your status.
+
+Plugins declare the outside `service` they talk to; the registry keeps a history source's entries
+away from outputs for the same service (see `src/core/plugin.ts`).
+
+### Feeds
+
+Feeds are outputs: add **Calendar feed** or **JSON feed** under Outputs (or from Settings). Each
+has its own secret link on its page, which works only while that output is enabled; **Create a new
+link** revokes the old one. Anyone with a link can read what it publishes; treat it as a password.
+
+- **Calendar feed** (`/public/<id>/calendar.ics?token=…`): events with stable UIDs. Choose everything
+  sources saw or only what outputs showed, which kinds, whether to combine back-to-back items, and
+  how many days to include.
+- **JSON feed** (`/public/<id>/history.json?token=…`): source segments, each with its `sourceLabel`
+  and, for history sources, its `origin`, plus output segments. Optional `from`/`to` query
   parameters accept ISO dates or epoch milliseconds; `sourceId` filters one source.
 
-Copy complete links from Overview or Settings. These two routes use a secret token instead of
-the UI password, so calendars and scripts can subscribe. **Settings → Regenerate links** revokes
-all earlier links. Anyone with a link can read the history; treat it as a password.
+Links from before feeds were outputs (`/feed/history.ics` and `/api/history.json`) keep working
+once you add the matching feed: its first instance adopts the old token.
 
 History defaults to **90 days** of retention, adjustable in Settings. A 15-second heartbeat closes
 segments interrupted by a crash at the last observed time on the next start, so downtime is not
@@ -328,8 +376,10 @@ or outputs; changes to plugin settings reconnect the affected instance.
 ```
 src/
   core/        activity model, selection hub, plugin interfaces, registry, JSON/SQLite stores, logger
-  plugins/     sources and outputs; register new ones in plugins/index.ts
-    discord/   OAuth (PKCE), REST client, headless session, activity mapping, publisher
+  plugins/     sources, history sources and outputs; register new ones in plugins/index.ts
+    discord/   OAuth (PKCE), REST client, headless session, activity mapping, publisher; Discord status history source
+    ical/      Calendar (iCal) history source: fetching, recurrence expansion, time zones
+    feeds/     Calendar feed and JSON feed outputs: secret links, iCalendar text
     tautulli/  Plex via Tautulli: polling, filters, templates, artwork (TMDB, iTunes, signed proxy)
     jellyfin/  Jellyfin and Emby: session polling, filters, templates, artwork (TMDB, iTunes, signed proxy)
     trakt/     Trakt: watching polls, device-code sign-in with token refresh, templates, TMDB posters
@@ -342,9 +392,13 @@ src/
   web/         Hono + JSX server-rendered UI with htmx, and settings forms built from zod schemas
 ```
 
-A **source** calls `ctx.publish(nowPlaying | null)`. An **output** gets `onState(hubState)` with
+A **source** calls `ctx.publish(nowPlaying | null)`. A **history source** (`defineHistorySource`)
+writes to `ctx.history` instead: `observe(items)` for what a service shows right now, or
+`importEntries(window, entries)` for entries copied from elsewhere; it never reaches the Hub. An
+**output** gets `onState(hubState)` with
 `selected` and `selectionReason`, alongside every source’s current activity. An output can call
-`ctx.reportShown(sourceActivity | null)` to record what it has sent, and plugins call
+`ctx.reportShown(sourceActivity | null)` to record what it has sent, and read history through
+`ctx.history`, with the no-echo rule already applied. Plugins call
 `ctx.reportSuccess()` after successful polls or connection tests. A plugin declares its settings as a zod schema, which also
 generates its settings form. Plugins can add their own routes (under `/plugins/<instance>/`,
 behind the UI password), public routes (under `/public/<instance>/`, for images and webhooks; they

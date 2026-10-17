@@ -1,9 +1,9 @@
 import type { HubRules } from '../../core/hub.js';
 import type { LogEntry } from '../../core/log.js';
-import type { PanelProps, Plugin } from '../../core/plugin.js';
+import type { PanelProps, Plugin, PluginKind } from '../../core/plugin.js';
 import type { InstanceView, Registry } from '../../core/registry.js';
 import { RecentEvents } from '../components/events.js';
-import { InstanceActions } from '../components/instances.js';
+import { InstanceActions, KIND_NOUNS } from '../components/instances.js';
 import { Breadcrumb, PageHeader } from '../components/page.js';
 import { SaveBar } from '../components/save-bar.js';
 import { SettingsFields } from '../forms.js';
@@ -46,7 +46,7 @@ export function InstancePage({
       <Breadcrumb
         items={[
           { label: 'Overview', href: '/' },
-          { label: plugin?.kind === 'output' ? 'Outputs' : 'Sources' },
+          { label: plugin?.kind === 'output' ? 'Outputs' : plugin?.kind === 'history' ? 'History sources' : 'Sources' },
           { label: view.label },
         ]}
       />
@@ -56,6 +56,7 @@ export function InstancePage({
       {errors && <Notice kind="error">Some settings are invalid; see below.</Notice>}
       <div class="plugin-grid">
         <div>
+          {plugin && <NoEchoNote registry={registry} plugin={plugin} />}
           {view.live?.instance.panel?.(panelProps)}
           {plugin && (
             <InstanceSettingsForm
@@ -105,7 +106,7 @@ function InstanceHeader({
             </span>
           </div>
           <p>
-            {plugin?.kind === 'output' ? 'Output' : 'Source'} · {plugin?.name ?? view.config.plugin}
+            {plugin ? capitalize(KIND_NOUNS[plugin.kind]) : 'Instance'} · {plugin?.name ?? view.config.plugin}
             {' · '}<code>{id}</code>
             {plugin?.kind === 'source' && (
               ` · priority ${registry.sources().findIndex((source) => source.id === id) + 1}`
@@ -143,11 +144,11 @@ function InstanceSettingsForm({
       />
     </div>
   );
-  const outputRules = plugin.kind === 'output' ? (
+  const outputRules = plugin.kind === 'output' && plugin.publishes !== 'history' ? (
     <OutputRulesCard registry={registry} view={view} values={rulesValues} error={errors?._rules} />
   ) : undefined;
   const saveMessage = plugin.kind === 'output'
-    ? 'Saving reconnects this output.'
+    ? plugin.publishes === 'history' ? 'Saving updates what this feed publishes.' : 'Saving reconnects this output.'
     : 'Saving restarts this source.';
   const previewUrl = plugin.id === 'tautulli' && view.live
     ? `${view.routeBase}/template-preview`
@@ -169,7 +170,7 @@ function InstanceSettingsForm({
         groupExtras={{ [labelGroup]: labelField }}
         afterGroups={plugin.id === 'discord' ? { 'When to show': outputRules } : undefined}
       />
-      {plugin.kind === 'output' && plugin.id !== 'discord' && outputRules}
+      {plugin.id !== 'discord' && outputRules}
       <SaveBar message={saveMessage} />
     </form>
   );
@@ -200,23 +201,31 @@ export function InstanceLiveBlock({
   );
 }
 
+const ADD_INTROS: Record<PluginKind, string> = {
+  source: 'Sources report what you’re doing right now. The Hub picks one activity from them for your outputs.',
+  history: 'History sources copy past or background activity from other services into your history and Calendar. They never feed the Hub, so outputs never show them live.',
+  output: 'Outputs show the Hub’s activity somewhere, or publish your history as a feed.',
+};
+
 export function AddInstancePage({
   kind,
   plugins,
 }: {
-  kind: 'source' | 'output';
+  kind: PluginKind;
   plugins: Plugin[];
 }) {
+  const noun = KIND_NOUNS[kind];
   return (
-    <Layout title={`Add ${kind}`}>
-      <Breadcrumb items={[{ label: 'Overview', href: '/' }, { label: `Add ${kind}` }]} />
-      <PageHeader title={`Add ${kind}`} />
+    <Layout title={`Add ${noun}`}>
+      <Breadcrumb items={[{ label: 'Overview', href: '/' }, { label: `Add ${noun}` }]} />
+      <PageHeader title={`Add ${noun}`} />
       <div class="max-w-2xl">
+        <p class="muted mb-5">{ADD_INTROS[kind]}</p>
         {plugins.length ? (
           plugins.map((plugin) => <AddPluginForm plugin={plugin} />)
         ) : (
           <section class="card">
-            <p class="muted">All available {kind}s have been added.</p>
+            <p class="muted">All available {noun}s have been added.</p>
             <a href="/">Back to Overview</a>
           </section>
         )}
@@ -238,5 +247,44 @@ function AddPluginForm({ plugin }: { plugin: Plugin }) {
         Add
       </button>
     </form>
+  );
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * The no-echo rule, stated where it applies: a history source's entries never reach an output for
+ * the same service, and such an output never publishes them.
+ */
+function NoEchoNote({ registry, plugin }: { registry: Registry; plugin: Plugin }) {
+  if (plugin.kind === 'source') return null;
+  const service = plugin.service;
+  const counterparts = service
+    ? registry.plugins().filter((other) => other.service === service && other.kind !== plugin.kind && other.kind !== 'source')
+    : [];
+  if (plugin.kind === 'history') {
+    return (
+      <div class="notice history-note">
+        <Icon name="calendar" size={16} />
+        <div>
+          <strong>History only.</strong> This adds to your history and{' '}<a href="/calendar">Calendar</a>. It never feeds the
+          Hub, so no output shows it live.
+          {!!counterparts.length && <> It’s also never sent back where it came from: {counterparts.map((other) => other.name).join(' and ')}{' '}
+            {counterparts.length === 1 ? 'leaves' : 'leave'} it out.</>}
+        </div>
+      </div>
+    );
+  }
+  if (!counterparts.length) return null;
+  return (
+    <div class="notice history-note">
+      <Icon name="calendar" size={16} />
+      <div>
+        {plugin.kind === 'output' && plugin.publishes === 'history' ? 'Never includes history copied in by ' : 'Never shows what is recorded by '}
+        {counterparts.map((other) => other.name).join(' or ')}, so nothing echoes back to where it came from.
+      </div>
+    </div>
   );
 }

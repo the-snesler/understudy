@@ -147,7 +147,7 @@ function FieldInput({ field, props }: { field: Field; props: FieldsProps }) {
     input = <>
       <label for={id} class="field-label">{s.order && <span class="order-badge">{s.order}</span>}{title}</label>
       <div class="secret-control" data-secret>
-        <input {...common} type="password" autocomplete="new-password" placeholder={value ? '••••••••••••••••' : 'Enter an API key'} data-secret-input readonly={!!value} />
+        <input {...common} type="password" autocomplete="new-password" placeholder={value ? '••••••••••••••••' : s.placeholder ?? 'Enter an API key'} data-secret-input readonly={!!value} />
         {!!value && <button type="button" class="btn secondary" data-replace-secret>Replace</button>}
       </div>
       {help}

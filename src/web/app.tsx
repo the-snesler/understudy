@@ -21,13 +21,14 @@ import { issuesByField, parseSettingsForm } from './forms.js';
 import { APPLE_TOUCH_ICON, ICON } from './icon.js';
 import { Health, LoginPage, PublishingCard } from './layout.js';
 import { Dashboard } from './dashboard.js';
-import { registerHistoryRoutes } from './history.js';
+import { calendarWeek } from './calendar.js';
+import { registerLegacyFeedRoutes } from './history.js';
 import { ErrorPage } from './pages/error.js';
 import { AddInstancePage, InstanceLiveBlock, InstancePage, type InstancePageValues } from './pages/instances.js';
 import { LogPage } from './pages/log.js';
 import { OverviewPage } from './pages/overview.js';
 import { HubRulesPage, SettingsPage } from './pages/settings.js';
-import { TimelinePage } from './pages/timeline.js';
+import { CalendarPage, CalendarView, type CalendarProps } from './pages/calendar.js';
 
 const require = createRequire(import.meta.url);
 const HTMX = fs.readFileSync(require.resolve('htmx.org/dist/htmx.min.js'), 'utf8');
@@ -84,7 +85,7 @@ export function createWebApp(opts: WebOptions): Hono {
   });
 
   const origin = (c: Context) => env.publicUrl ?? new URL(c.req.url).origin;
-  if (opts.history) registerHistoryRoutes(app, opts.history, { timeZone: () => registry.hubRules().timeZone });
+  registerLegacyFeedRoutes(app, registry);
   let dismissedAt = opts.preferences?.get()?.attentionDismissedAt ?? 0;
 
   app.get('/healthz', (c) => c.json({ ok: true }));
@@ -205,7 +206,6 @@ export function createWebApp(opts: WebOptions): Hono {
     hub,
     logs,
     history: opts.history,
-    origin: origin(c),
     dismissedAt,
   });
   app.get('/', (c) => c.html(<OverviewPage {...dashboardProps(c)} />));
@@ -219,14 +219,21 @@ export function createWebApp(opts: WebOptions): Hono {
     await opts.preferences?.set({ ...opts.preferences.get(), attentionDismissedAt: dismissedAt });
     return c.redirect('/');
   });
-  app.get('/timeline', (c) => c.html(<TimelinePage />));
+  const calendarProps = (c: Context): CalendarProps => {
+    const views = registry.list();
+    return {
+      week: calendarWeek(opts.history, registry.hubRules().timeZone, c.req.query('date')),
+      labels: Object.fromEntries(views.map((view) => [view.config.id, view.label])),
+      retentionDays: registry.historyRetention(),
+      historySources: views.filter((view) => view.plugin?.kind === 'history').length,
+      available: !!opts.history,
+    };
+  };
+  app.get('/calendar', (c) => c.html(<CalendarPage {...calendarProps(c)} />));
+  app.get('/partials/calendar', (c) => c.html(<CalendarView {...calendarProps(c)} />));
+  app.get('/timeline', (c) => c.redirect('/calendar', 301));
   app.get('/settings', (c) => c.html(
-    <SettingsPage
-      registry={registry}
-      history={opts.history}
-      origin={origin(c)}
-      notice={c.req.query('notice')}
-    />,
+    <SettingsPage registry={registry} notice={c.req.query('notice')} />,
   ));
   const hubSettings = (
     c: Context,
@@ -257,14 +264,10 @@ export function createWebApp(opts: WebOptions): Hono {
     opts.history?.setRetention(days);
     return c.redirect('/settings?notice=saved');
   });
-  app.post('/settings/feeds/regenerate', (c) => {
-    if (!opts.history) return c.text('History is not available', 501);
-    opts.history.regenerateToken();
-    return c.redirect('/settings?notice=regenerated');
-  });
   app.get('/log', (c) => c.html(<LogPage entries={logs.recent(500)} />));
   app.get('/instances/new', (c) => {
-    const kind = c.req.query('kind') === 'output' ? 'output' : 'source';
+    const requested = c.req.query('kind');
+    const kind = requested === 'output' || requested === 'history' ? requested : 'source';
     const addable = registry.plugins().filter((plugin) => (
       plugin.kind === kind && (
         plugin.multiple || !registry.list().some((view) => view.config.plugin === plugin.id)

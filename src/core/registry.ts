@@ -1,10 +1,13 @@
 import { Hono } from 'hono';
 import type { z } from 'zod';
 import { stableStringify, type NowPlaying } from './activity.js';
+import type { HistoryStore } from './history.js';
 import { defaultHubRules, hubRulesSchema, type Hub, type HubRules } from './hub.js';
 import { errorMessage, type Logger } from './log.js';
 import type {
   AppEnv,
+  HistoryReader,
+  HistoryWriter,
   Instance,
   InstanceStatus,
   OutputInstance,
@@ -109,6 +112,7 @@ export class Registry {
   private readonly failures = new Map<string, string>();
   private readonly successes = new Map<string, number>();
   private queue: Promise<unknown> = Promise.resolve();
+  private history: HistoryStore | undefined;
 
   constructor(
     private readonly opts: {
@@ -122,6 +126,11 @@ export class Registry {
   ) {
     this.pluginsById = new Map(opts.plugins.map((p) => [p.id, p]));
     this.refreshHub(migrateAppConfig(opts.config.get(), this.sources().map((source) => source.id)));
+  }
+
+  /** History sources write here and feed outputs read from it. Attach before `startAll`. */
+  attachHistory(history: HistoryStore): void {
+    this.history = history;
   }
 
   plugins(): Plugin[] {
@@ -276,9 +285,12 @@ export class Registry {
     });
   }
 
+  /** Removing a history source also deletes what it copied in; live source history stays. */
   remove(id: string): Promise<void> {
     return this.serial(async () => {
+      const view = this.get(id);
       await this.stopInstance(id);
+      if (view?.plugin?.kind === 'history') this.history?.deleteSource(id);
       await this.opts.config.update((c) => ({ ...c, instances: c.instances.filter((i) => i.id !== id) }));
       await new ScopedState(this.opts.state, id).set(undefined);
       this.failures.delete(id);
@@ -344,6 +356,21 @@ export class Registry {
       routeBase: `/plugins/${cfg.id}`,
       status,
       live,
+    };
+  }
+
+  /** The no-echo rule: an output never reads entries copied from its own service. */
+  private historyReader(service: string | undefined): HistoryReader | undefined {
+    const history = this.history;
+    if (!history) return undefined;
+    return {
+      query: (options = {}) => history.query({
+        ...options,
+        excludeOrigins: [...(options.excludeOrigins ?? []), ...(service ? [service] : [])],
+      }),
+      timeZone: () => this.hubRules().timeZone,
+      label: (sourceId) => this.get(sourceId)?.label ?? sourceId,
+      legacyFeedToken: () => history.legacyFeedToken(),
     };
   }
 
@@ -418,7 +445,23 @@ export class Registry {
     try {
       let instance: Instance;
       let unsubscribe: (() => void) | undefined;
-      if (plugin.kind === 'source') {
+      if (plugin.kind === 'history') {
+        const history = this.history;
+        if (!history) throw new Error('History storage is not available');
+        const origin = plugin.service ?? plugin.id;
+        const writer: HistoryWriter = {
+          observe: (items) => {
+            if (!abort.signal.aborted) history.observe(cfg.id, origin, items);
+          },
+          importEntries: (window, entries) => {
+            if (abort.signal.aborted) return { added: 0, updated: 0, removed: 0 };
+            return history.importEntries(cfg.id, origin, window, entries);
+          },
+          recent: (limit) => history.latest(cfg.id, limit),
+          clear: () => history.deleteSource(cfg.id),
+        };
+        instance = plugin.create({ ...base, history: writer, timeZone: () => this.hubRules().timeZone });
+      } else if (plugin.kind === 'source') {
         const hub = this.opts.hub;
         instance = plugin.create({
           ...base,
@@ -429,6 +472,7 @@ export class Registry {
       } else {
         const output: OutputInstance = plugin.create({
           ...base,
+          history: this.historyReader(plugin.service),
           sources: () => this.sources(),
           reportShown: (activity) => {
             // A successful withdrawal during stop is still evidence. Reject callbacks from older
@@ -479,7 +523,10 @@ export class Registry {
     } finally {
       this.live.delete(id);
     }
-    this.opts.hub.set(id, null);
+    const plugin = this.pluginsById.get(this.opts.config.get().instances.find((i) => i.id === id)?.plugin ?? '');
+    // A stopped history source can't see anything any more, so whatever it was observing ends now.
+    if (plugin?.kind === 'history') this.history?.observe(id, plugin.service ?? plugin.id, []);
+    else this.opts.hub.set(id, null);
   }
 
   private serial<T>(fn: () => Promise<T>): Promise<T> {

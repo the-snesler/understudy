@@ -6,9 +6,11 @@ import { z } from 'zod';
 import { HistoryStore } from '../src/core/history.js';
 import { Hub, type HubState } from '../src/core/hub.js';
 import { LogBuffer, Logger } from '../src/core/log.js';
-import { defineOutput, defineSource, type InstanceStatus } from '../src/core/plugin.js';
+import { defineHistorySource, defineOutput, defineSource, type InstanceStatus } from '../src/core/plugin.js';
 import { Registry, type AppConfig } from '../src/core/registry.js';
 import { JsonStore, ScopedState } from '../src/core/store.js';
+import { calendarFeedPlugin } from '../src/plugins/feeds/calendar.js';
+import { jsonFeedPlugin } from '../src/plugins/feeds/json.js';
 import { createWebApp } from '../src/web/app.js';
 import { movie, signIn } from './helpers.js';
 
@@ -62,6 +64,19 @@ async function boot() {
       },
     }),
   });
+  // Stands in for the iCal source: copies one calendar event in on start.
+  const imported = defineHistorySource({
+    id: 'imported', name: 'Imported calendar', description: '', service: 'calendar', multiple: true,
+    configSchema: z.object({}),
+    create: (ctx) => ({
+      start() {
+        const now = Date.now();
+        ctx.history.importEntries({ from: now - 86_400_000, to: now }, [{ uid: 'lecture', title: 'Imported lecture', startedAt: now - 3_600_000, endedAt: now - 1_800_000 }]);
+      },
+      stop() {},
+      status: () => ({ health: 'ok', message: 'Imported' }),
+    }),
+  });
   const initial: AppConfig = {
     version: 1,
     hub: { paused: 'hide', quietHours: '', timeZone: 'UTC' },
@@ -77,10 +92,11 @@ async function boot() {
   const stateFile = path.join(dir, 'state.json');
   const state = new JsonStore<Record<string, unknown>>(stateFile, () => ({}));
   const registry = new Registry({
-    plugins: [source, output], config, state, hub, log: new Logger(logs, 'test', 'error'),
+    plugins: [source, output, imported, calendarFeedPlugin, jsonFeedPlugin], config, state, hub, log: new Logger(logs, 'test', 'error'),
     env: { publicUrl: undefined, dataDir: dir },
   });
   resources.push({ registry, history, dir });
+  registry.attachHistory(history);
   await registry.startAll();
   const preferences = new ScopedState<{ attentionDismissedAt?: number }>(state, '_preferences');
   const options = {
@@ -143,48 +159,106 @@ describe('source priority routes', () => {
   });
 });
 
-describe('history link access', () => {
-  it('allows public feed reads only with a valid token and protects unrelated routes', async () => {
+async function addFeed(t: Awaited<ReturnType<typeof boot>>, plugin: string): Promise<{ id: string; url: URL }> {
+  const added = await t.form('/instances', { plugin });
+  const id = added.headers.get('location')!.match(/\/instances\/([^?]+)/)![1]!;
+  await t.form(`/instances/${id}/enable`, {});
+  const page = await (await t.app.request(`/instances/${id}`, { headers: t.session })).text();
+  const link = page.match(/data-copy="(http:\/\/localhost\/public\/[^"]+)"/)![1]!.replace(/&amp;/g, '&');
+  return { id, url: new URL(link) };
+}
+
+describe('history feed outputs', () => {
+  it('publish only once added and enabled, with their own token, and leave the old routes to the output', async () => {
     const t = await boot();
+    await t.form('/instances', { plugin: 'imported' });
+    await t.form('/instances/imported/enable', {});
     await vi.advanceTimersByTimeAsync(1000);
-    const token = t.history.token();
-    expect((await t.app.request('/settings')).status).toBe(303);
+    expect(t.history.query({ sourceId: 'imported' })).toHaveLength(1);
+    expect((await t.app.request('/feed/history.ics?token=anything')).status).toBe(404);
+    expect((await t.app.request('/api/history.json?token=anything')).status).toBe(404);
+    const overview = await (await t.app.request('/', { headers: t.session })).text();
+    expect(overview).not.toContain('/feed/history.ics');
+
+    const calendar = await addFeed(t, 'calendar-feed');
+    const token = calendar.url.searchParams.get('token')!;
+    expect(calendar.url.pathname).toBe(`/public/${calendar.id}/calendar.ics`);
+    expect((await t.app.request(calendar.url.pathname)).status).toBe(401);
+    expect((await t.app.request(`${calendar.url.pathname}?token=invalid`, { headers: t.session })).status).toBe(401);
     expect((await t.app.request(`/api/status?token=${token}`)).status).toBe(401);
-    for (const route of ['/feed/history.ics', '/api/history.json']) {
-      expect((await t.app.request(route)).status).toBe(401);
-      expect((await t.app.request(`${route}?token=invalid`, { headers: t.session })).status).toBe(401);
-      const response = await t.app.request(`${route}?token=${token}`);
-      expect(response.status).toBe(200);
-      if (route.endsWith('.ics')) expect(await response.text()).toContain('BEGIN:VEVENT');
-      else expect(await response.json()).toMatchObject({ timeZone: 'UTC', segments: expect.arrayContaining([
-        expect.objectContaining({ sourceId: 'a' }), expect.objectContaining({ sourceId: 'b' }), expect.objectContaining({ sourceId: 'c' }),
-      ]) });
-    }
+    const ics = await t.app.request(calendar.url.pathname + calendar.url.search);
+    expect(ics.status).toBe(200);
+    expect(ics.headers.get('cache-control')).toBe('private, no-store');
+    const text = await ics.text();
+    expect(text).toContain('SUMMARY:Activity A');
+    // The no-echo rule: events imported from a calendar never go back out in a calendar feed.
+    expect(text).not.toContain('Imported lecture');
+    expect((await t.app.request(`/feed/history.ics?token=${token}`)).status).toBe(200);
+    expect((await t.app.request('/feed/history.ics?token=invalid')).status).toBe(401);
+
+    const json = await addFeed(t, 'json-feed');
+    const body = await (await t.app.request(json.url.pathname + json.url.search)).json() as { segments: unknown[] };
+    expect(body).toMatchObject({ timeZone: 'UTC', outputSegments: expect.any(Array) });
+    expect(body.segments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceId: 'a', sourceLabel: 'Source A' }),
+      expect.objectContaining({ title: 'Imported lecture', kind: 'event', origin: 'calendar' }),
+    ]));
+    expect((await t.app.request(`/api/history.json?token=${json.url.searchParams.get('token')}&from=bad`)).status).toBe(400);
+
+    await t.form(`/instances/${calendar.id}/disable`, {});
+    expect((await t.app.request(calendar.url.pathname + calendar.url.search)).status).toBe(404);
   });
 
-  it('requires an authenticated, same-origin Settings rotation and revokes old links', async () => {
+  it('rotates one feed link with an authenticated, same-origin request', async () => {
     const t = await boot();
-    const token = t.history.token();
-    const anonymous = await t.app.request('/settings/feeds/regenerate', {
+    const feed = await addFeed(t, 'calendar-feed');
+    const path = `/plugins/${feed.id}/regenerate`;
+    const anonymous = await t.app.request(path, {
       method: 'POST', body: new URLSearchParams(),
       headers: { Origin: 'http://localhost', 'Content-Type': 'application/x-www-form-urlencoded' },
     });
     expect(anonymous.status).toBe(303);
-    expect(t.history.token()).toBe(token);
-    expect((await t.form('/settings/feeds/regenerate', {}, { Origin: 'https://other.example' })).status).toBe(403);
-    expect(t.history.token()).toBe(token);
-    const rotated = await t.form('/settings/feeds/regenerate', {});
-    expect(rotated.status).toBe(302);
-    expect(rotated.headers.get('location')).toBe('/settings?notice=regenerated');
-    const replacement = t.history.token();
-    expect(replacement).not.toBe(token);
-    for (const route of ['/feed/history.ics', '/api/history.json']) {
-      expect((await t.app.request(`${route}?token=${token}`)).status).toBe(401);
-      expect((await t.app.request(`${route}?token=${replacement}`)).status).toBe(200);
-    }
-    const settings = await (await t.app.request('/settings', { headers: t.session })).text();
-    expect(settings).toContain(replacement);
-    expect(settings).not.toContain(token);
+    expect((await t.form(path, {}, { Origin: 'https://other.example' })).status).toBe(403);
+    expect((await t.app.request(feed.url.pathname + feed.url.search)).status).toBe(200);
+    expect((await t.form(path, {})).status).toBe(302);
+    expect((await t.app.request(feed.url.pathname + feed.url.search)).status).toBe(401);
+    const page = await (await t.app.request(`/instances/${feed.id}`, { headers: t.session })).text();
+    expect(page).not.toContain(feed.url.searchParams.get('token')!);
+    expect(page).toContain('Never includes history copied in by Imported calendar');
+  });
+});
+
+describe('history sources and the Calendar', () => {
+  it('keeps history sources out of the Hub, shows them in the Calendar, and deletes their entries on removal', async () => {
+    const t = await boot();
+    const added = await t.form('/instances', { plugin: 'imported' });
+    expect(added.headers.get('location')).toBe('/instances/imported?notice=added');
+    await t.form('/instances/imported/enable', {});
+    expect(t.registry.sources().map((source) => source.id)).toEqual(['a', 'b', 'c']);
+    expect(t.hub.get('imported')).toBeUndefined();
+    const overview = await (await t.app.request('/', { headers: t.session })).text();
+    expect(overview).toContain('History sources');
+    expect(overview).toContain('/instances/imported');
+    const page = await (await t.app.request('/instances/imported', { headers: t.session })).text();
+    expect(page).toContain('History only.');
+    expect((await (await t.app.request('/instances/new?kind=history', { headers: t.session })).text())).toContain('Add history source');
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    const calendar = await (await t.app.request('/calendar', { headers: t.session })).text();
+    expect(calendar).toContain('Oct 5 – 11, 2026');
+    expect(calendar).toContain('Imported lecture');
+    expect(calendar).toContain('Activity A');
+    expect(calendar).toContain('Calendar event · <a href="/instances/imported">Imported calendar</a>');
+    const partial = await (await t.app.request('/partials/calendar?date=2026-10-20', { headers: t.session })).text();
+    expect(partial).toContain('Oct 19 – 25, 2026');
+    expect(partial).toContain('This day hasn’t happened yet.');
+    const timeline = await t.app.request('/timeline', { headers: t.session });
+    expect([timeline.status, timeline.headers.get('location')]).toEqual([301, '/calendar']);
+
+    expect(t.history.query({ sourceId: 'imported' })).toHaveLength(1);
+    await t.form('/instances/imported/remove', {});
+    expect(t.history.query({ sourceId: 'imported' })).toHaveLength(0);
+    expect(t.history.query({ sourceId: 'a' }).length).toBeGreaterThan(0);
   });
 });
 

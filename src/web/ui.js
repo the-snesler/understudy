@@ -153,7 +153,7 @@
     if (!button) return;
     if (button.hasAttribute('data-replace-secret')) {
       const input = button.closest('[data-secret]').querySelector('[data-secret-input]');
-      input.readOnly = false; input.placeholder = 'Enter replacement key'; input.focus(); button.hidden = true;
+      input.readOnly = false; input.placeholder = 'Enter a replacement'; input.focus(); button.hidden = true;
     } else if (button.hasAttribute('data-add-chip')) addChip(button.closest('[data-chips]'), button.dataset.addChip);
     else if (button.hasAttribute('data-remove-chip')) {
       const widget = button.closest('[data-chips]');
@@ -208,6 +208,7 @@
     }
   });
   document.addEventListener('submit', (event) => {
+    if (event.target.dataset.confirm && !window.confirm(event.target.dataset.confirm)) { event.preventDefault(); return; }
     if (!event.target.matches('.settings-form')) return;
     all('[data-chips]', event.target).forEach((widget) => addChip(widget, widget.querySelector('[data-chips-entry]').value));
     submitting = true;

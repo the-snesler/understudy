@@ -1,32 +1,22 @@
-import type { HistoryStore } from '../../core/history.js';
 import { sharedSettingsSchema } from '../../core/shared-settings.js';
 import type { Registry } from '../../core/registry.js';
-import { FeedsCard } from '../components/history.js';
 import { Breadcrumb, PageHeader } from '../components/page.js';
 import { SettingsFields } from '../forms.js';
-import { Icon } from '../icons.js';
-import { Layout, Notice } from '../layout.js';
+import { Icon, PluginIcon } from '../icons.js';
+import { Health, Layout, Notice } from '../layout.js';
 import { HubSettings } from '../settings.js';
 
 export function SettingsPage({
   registry,
-  history,
-  origin,
   notice,
 }: {
   registry: Registry;
-  history?: HistoryStore;
-  origin: string;
   notice?: string;
 }) {
-  const message = notice === 'regenerated'
-    ? 'New feed links created. Previous links no longer work.'
-    : 'Settings saved.';
-
   return (
     <Layout title="Settings">
       <PageHeader title="Settings" />
-      {notice && <Notice kind="ok">{message}</Notice>}
+      {notice && <Notice kind="ok">Settings saved.</Notice>}
       <div class="plugin-grid">
         <div>
           <HubRulesLink />
@@ -38,9 +28,8 @@ export function SettingsPage({
             </div>
           </form>
           <RetentionForm retentionDays={registry.historyRetention()} />
-          {history && <FeedAccessCard />}
         </div>
-        <aside class="aside-column"><FeedsCard history={history} origin={origin} /></aside>
+        <aside class="aside-column"><ShareHistoryCard registry={registry} /></aside>
       </div>
     </Layout>
   );
@@ -81,16 +70,33 @@ function RetentionForm({ retentionDays }: { retentionDays: number }) {
   );
 }
 
-function FeedAccessCard() {
+/** Feeds are outputs; this points to them from where people used to find feed links. */
+function ShareHistoryCard({ registry }: { registry: Registry }) {
+  const feeds = registry.list().filter((view) => view.plugin?.kind === 'output' && view.plugin.publishes === 'history');
+  const missing = registry.plugins().filter((plugin) => (
+    plugin.kind === 'output' && plugin.publishes === 'history' && !feeds.some((view) => view.config.plugin === plugin.id)
+  ));
   return (
     <section class="card">
-      <h2>Feed access</h2>
+      <h2>Share your history</h2>
       <p class="muted small mt-1">
-        Anyone with a feed link can read your history. Regenerating links revokes the old ones.
+        Calendar and JSON feeds are outputs. Each has its own secret link, which works only while
+        the output is enabled.
       </p>
-      <form method="post" action="/settings/feeds/regenerate" class="mt-4">
-        <button class="btn"><Icon name="restart" size={15} />Regenerate links</button>
-      </form>
+      {feeds.map((view) => (
+        <a class="feed-item" href={`/instances/${view.config.id}`}>
+          <PluginIcon plugin={view.config.plugin} />
+          <div class="min-w-0">
+            <strong class="small">{view.label}</strong>
+            <div class="small"><Health health={view.config.enabled ? view.status.health : 'idle'} message={view.config.enabled ? view.status.message : 'Off'} /></div>
+          </div>
+        </a>
+      ))}
+      {missing.map((plugin) => (
+        <form method="post" action="/instances" class="mt-3">
+          <button class="btn w-full" name="plugin" value={plugin.id}><Icon name="plus" size={15} />Add {plugin.name}</button>
+        </form>
+      ))}
     </section>
   );
 }
