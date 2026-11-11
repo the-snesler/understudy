@@ -29,6 +29,8 @@ export interface ApiOptions {
 }
 
 const MAX_429_RETRIES = 3;
+/** Never let a hung request block publishing indefinitely. */
+const REQUEST_TIMEOUT_MS = 15_000;
 
 /**
  * Minimal Discord REST client for user-authorised (Bearer) calls. It refreshes the token once on a
@@ -61,6 +63,7 @@ export class DiscordApi {
           ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       this.trackRateLimit(res);
       const text = await res.text();

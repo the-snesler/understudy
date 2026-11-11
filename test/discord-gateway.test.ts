@@ -213,6 +213,59 @@ describe('DiscordGateway', () => {
     expect(t.gw.informed).toBe(false);
   });
 
+  it('reconnects when a new socket never receives HELLO', async () => {
+    const t = setup();
+    await t.connect([session('desk', 'online')]);
+    t.last().drop(1000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const stuck = t.last();
+    // The socket "opens" but Discord never speaks: without a watchdog this hangs forever.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(stuck.closed).toEqual([4000]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const next = t.last();
+    expect(next).not.toBe(stuck);
+    // The resume was ignored, so start over with IDENTIFY.
+    expect(next.url).toBe('wss://gateway.test/?v=10&encoding=json');
+    next.receive(10, { heartbeat_interval: 40_000 });
+    expect(next.ops()[0]).toBe(2);
+    next.receive(0, { session_id: 'ours2', resume_gateway_url: 'wss://resume.test', sessions: [session('desk', 'online')] }, 'READY', 1);
+    expect(t.gw.state).toBe('ready');
+  });
+
+  it('a pending presence update succeeds once a stuck reconnect recovers', async () => {
+    const t = setup();
+    await t.connect([session('desk', 'online')]);
+    t.last().drop(1000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const resuming = t.last();
+    resuming.receive(10, { heartbeat_interval: 40_000 }); // HELLO, then RESUMED never comes
+    const first = t.gw.setActivityAndWait({ type: 3, name: 'Plex' });
+    const firstResult = first.catch((e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await firstResult).toMatch(/timed out/);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const s = t.last();
+    expect(s).not.toBe(resuming);
+    expect(s.url).toBe('wss://gateway.test/?v=10&encoding=json');
+    s.receive(10, { heartbeat_interval: 40_000 });
+    s.receive(0, { session_id: 'ours2', resume_gateway_url: 'wss://resume.test', sessions: [session('desk', 'online')] }, 'READY', 1);
+    await expect(t.gw.setActivityAndWait({ type: 3, name: 'Plex' })).resolves.toBe(true);
+  });
+
+  it('does not let a close that never completes stall reconnecting', async () => {
+    const t = setup();
+    await t.connect([]);
+    const first = t.last();
+    // A half-open socket: close() never produces a 'close' event.
+    first.close = (code = 1000) => void first.closed.push(code);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(40_000); // no ack → zombie
+    expect(first.closed).toEqual([4000]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(t.last()).not.toBe(first);
+  });
+
   it('refreshes the token and identifies afresh after an authentication failure', async () => {
     const t = setup();
     await t.connect([]);

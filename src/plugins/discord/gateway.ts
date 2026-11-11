@@ -86,6 +86,13 @@ const STALE_GRACE_MS = 2 * 60_000;
 const PRESENCE_GAP_MS = 2_000;
 /** Do not let a disconnected socket hold an output send indefinitely. */
 const PRESENCE_CONFIRM_MS = 15_000;
+/**
+ * How long a new connection may take to reach READY or RESUMED. Without this, a socket that opens
+ * but never gets HELLO (e.g. it went half-open during a network blip), or a RESUME that Discord
+ * never answers, leaves us 'reconnecting' forever: heartbeats (and so zombie detection) only start
+ * after HELLO, and nothing else ever closes the socket.
+ */
+const HANDSHAKE_MS = 30_000;
 /** Minimum spacing between corrections when Discord reports a different status than we sent. */
 const CORRECTION_GAP_MS = 15_000;
 /** Discord's session list can lag our own update by a moment; only correct after this. */
@@ -124,6 +131,7 @@ export class DiscordGateway {
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   private firstBeat: ReturnType<typeof setTimeout> | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private handshakeTimer: ReturnType<typeof setTimeout> | undefined;
   private acked = true;
   private attempt = 0;
   private hasInfo = false;
@@ -224,6 +232,7 @@ export class DiscordGateway {
     this.activity = null;
     this.rejectPresenceRequests('The Discord Gateway stopped before sending the presence update');
     clearTimeout(this.reconnectTimer);
+    clearTimeout(this.handshakeTimer);
     this.stopHeartbeat();
     // 1000 ends the session immediately, rather than leaving it to time out.
     if (this.socket && this.socket.readyState === OPEN) this.socket.close(1000, 'stopping');
@@ -267,6 +276,16 @@ export class DiscordGateway {
     const send = (op: number, d: unknown) => {
       if (current() && socket.readyState === OPEN) socket.send(JSON.stringify({ op, d }));
     };
+    clearTimeout(this.handshakeTimer);
+    this.handshakeTimer = setTimeout(() => {
+      if (!current()) return;
+      this.opts.log.warn(
+        `Discord did not ${resuming ? 'resume' : 'accept'} the Gateway connection within ${HANDSHAKE_MS / 1000}s; reconnecting`,
+      );
+      // The resume may be what Discord is ignoring; start over with IDENTIFY.
+      if (resuming) this.resetSession();
+      this.abandon(socket, 4000, 'handshake timed out');
+    }, HANDSHAKE_MS);
 
     socket.addEventListener('message', (ev: { data: unknown }) => {
       if (!current()) return;
@@ -279,7 +298,7 @@ export class DiscordGateway {
       if (typeof msg.s === 'number') this.seq = msg.s;
       switch (msg.op) {
         case 10: {
-          this.startHeartbeat(msg.d.heartbeat_interval, () => send(1, this.seq), () => socket.close(4000, 'zombied'));
+          this.startHeartbeat(msg.d.heartbeat_interval, () => send(1, this.seq), () => this.abandon(socket, 4000, 'zombied'));
           if (resuming) send(6, { token: `Bearer ${token}`, session_id: this.sessionId, seq: this.seq });
           else
             send(2, {
@@ -295,12 +314,12 @@ export class DiscordGateway {
           send(1, this.seq);
           break;
         case 7: // Discord asks us to reconnect (and resume).
-          socket.close(4000, 'reconnect requested');
+          this.abandon(socket, 4000, 'reconnect requested');
           break;
         case 9: {
           // Invalid session: resumable if d is true; otherwise start over.
           if (!msg.d) this.resetSession();
-          socket.close(4000, 'invalid session');
+          this.abandon(socket, 4000, 'invalid session');
           break;
         }
         case 0:
@@ -311,9 +330,7 @@ export class DiscordGateway {
 
     socket.addEventListener('close', (ev: { code: number; reason?: string }) => {
       if (!current()) return;
-      this.socket = undefined;
-      this.sendFn = undefined;
-      this.stopHeartbeat();
+      this.detach();
       void this.onClose(ev.code, ev.reason ?? '');
     });
     socket.addEventListener('error', () => {
@@ -381,7 +398,7 @@ export class DiscordGateway {
     } catch (error) {
       this.rejectPresenceRequests(`Could not send Discord presence: ${errorMessage(error)}`);
       this.opts.log.warn(`Could not send Discord presence: ${errorMessage(error)}`);
-      this.socket?.close(4000, 'presence send failed');
+      if (this.socket) this.abandon(this.socket, 4000, 'presence send failed');
       return;
     }
     this.lastPresenceAt = Date.now();
@@ -447,6 +464,7 @@ export class DiscordGateway {
 
   private ready(send: (op: number, d: unknown) => void): void {
     const wasReconnect = this.attempt > 0;
+    clearTimeout(this.handshakeTimer);
     this.state = 'ready';
     this.attempt = 0;
     this.lastError = undefined;
@@ -483,6 +501,29 @@ export class DiscordGateway {
     this.state = 'reconnecting';
     this.opts.onChange();
     this.reconnectTimer = setTimeout(() => void this.connect(), delay);
+  }
+
+  /** Forget the current socket; its events are ignored from now on. */
+  private detach(): void {
+    clearTimeout(this.handshakeTimer);
+    this.socket = undefined;
+    this.sendFn = undefined;
+    this.stopHeartbeat();
+  }
+
+  /**
+   * Give up on a socket and reconnect now. Its own 'close' event can't be relied on: closing a
+   * half-open connection waits on a peer that is gone, which can take many minutes.
+   */
+  private abandon(socket: SocketLike, code: number, reason: string): void {
+    if (this.socket !== socket) return;
+    this.detach();
+    try {
+      socket.close(code, reason);
+    } catch {
+      // Already closing; nothing to do.
+    }
+    void this.onClose(code, reason);
   }
 
   private fail(message: string): void {

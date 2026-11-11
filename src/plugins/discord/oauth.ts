@@ -5,6 +5,9 @@ import crypto from 'node:crypto';
  * Social SDK turned on (without it Discord answers `invalid_scope`).
  */
 
+/** A hung token request would otherwise block reconnecting (and every API call) indefinitely. */
+const REQUEST_TIMEOUT_MS = 15_000;
+
 export const SCOPES = ['openid', 'sdk.social_layer_presence'] as const;
 
 export interface TokenSet {
@@ -90,6 +93,7 @@ async function tokenRequest(
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(params),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
@@ -150,5 +154,6 @@ export async function revokeToken(opts: {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ client_id: opts.clientId, token: opts.token }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 }
