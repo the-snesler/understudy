@@ -10,6 +10,9 @@ chooses your current activity, and keeps a private history on your server. Its D
 
 <img width="299" height="408" alt="image" src="https://github.com/user-attachments/assets/fdf98ce1-830b-41c6-9e23-85fe76a8c144" />
 
+<img width="3420" height="2148" alt="49854A36-0931-4795-AFD9-08C39F45D3C1" src="https://github.com/user-attachments/assets/8b2cc67c-a4e0-463d-93e2-595bf9d9c88e" />
+
+
 It doesn't need the Discord desktop app on the machine doing the playing.
 
 - **Sources:**
