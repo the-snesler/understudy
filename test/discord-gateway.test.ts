@@ -86,7 +86,7 @@ describe('DiscordGateway', () => {
     expect(s.url).toBe('wss://gateway.test/?v=10&encoding=json');
     expect(s.sent[0]).toMatchObject({ op: 2, d: { token: 'Bearer token-0' } });
     expect(s.sent[0]?.d.presence).toBeUndefined();
-    expect(s.sent[1]).toEqual({ op: 3, d: { since: 0, activities: [], status: 'invisible', afk: false } });
+    expect(s.sent[1]).toEqual({ op: 3, d: { since: 0, activities: [], status: 'invisible', afk: true } });
     expect(t.gw.state).toBe('ready');
     expect(t.gw.informed).toBe(true);
     expect(t.gw.sessionId).toBe('ours');

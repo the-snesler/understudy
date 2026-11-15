@@ -53,7 +53,12 @@ export interface Presence {
   since: 0;
   activities: GatewayActivity[];
   status: string;
-  afk: false;
+  /**
+   * Always true. Discord holds back mobile push notifications while the user has a non-AFK
+   * session elsewhere (it assumes they'll see the message there). Ours is a session nobody reads,
+   * so it must never count as "at the keyboard". This doesn't change the status others see.
+   */
+  afk: true;
 }
 
 export interface GatewayOptions {
@@ -78,7 +83,7 @@ export interface GatewayOptions {
 
 const DEFAULT_URL = process.env.DISCORD_GATEWAY_URL || 'wss://gateway.discord.gg/?v=10&encoding=json';
 const OPEN = 1;
-const INVISIBLE: Presence = { since: 0, activities: [], status: 'invisible', afk: false };
+const INVISIBLE: Presence = { since: 0, activities: [], status: 'invisible', afk: true };
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000];
 /** How long the last known session list stays trustworthy while reconnecting. */
 const STALE_GRACE_MS = 2 * 60_000;
@@ -373,7 +378,7 @@ export class DiscordGateway {
     const status = STATUS_ORDER.find((st) => statuses.includes(st));
     // Nobody is on Discord: showing anything would make the user appear online.
     if (!status) return INVISIBLE;
-    return { since: 0, activities: [this.activity], status, afk: false };
+    return { since: 0, activities: [this.activity], status, afk: true };
   }
 
   /** Send our presence if it changed, at most once per PRESENCE_GAP_MS. */
