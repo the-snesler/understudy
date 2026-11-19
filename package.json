@@ -29,7 +29,7 @@
     "nxapi": "1.6.1-next.257",
     "simple-icons": "^16.34.0",
     "sortablejs": "^1.15.7",
-    "zod": "^4.6.5"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.3.3",
