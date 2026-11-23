@@ -73,3 +73,21 @@ export class Auth {
     return createHmac('sha256', this.key).update(value).digest('base64url');
   }
 }
+
+export type UiAuthMode =
+  | { mode: 'password'; password: string }
+  /** `DISABLE_AUTH` is set: something in front of the app (e.g. a reverse proxy) authenticates. */
+  | { mode: 'disabled'; passwordIgnored: boolean }
+  /** Neither is set: the UI is open to anyone who can reach it. */
+  | { mode: 'open' };
+
+/** Reads `UI_PASSWORD` and `DISABLE_AUTH`. Throws on a `DISABLE_AUTH` value that isn't clearly yes or no. */
+export function uiAuthFromEnv(env: { UI_PASSWORD?: string; DISABLE_AUTH?: string }): UiAuthMode {
+  const raw = (env.DISABLE_AUTH ?? '').trim().toLowerCase();
+  let disabled: boolean;
+  if (['1', 'true', 'yes', 'on'].includes(raw)) disabled = true;
+  else if (['', '0', 'false', 'no', 'off'].includes(raw)) disabled = false;
+  else throw new Error(`DISABLE_AUTH must be true or false, not "${env.DISABLE_AUTH}"`);
+  if (disabled) return { mode: 'disabled', passwordIgnored: !!env.UI_PASSWORD };
+  return env.UI_PASSWORD ? { mode: 'password', password: env.UI_PASSWORD } : { mode: 'open' };
+}
