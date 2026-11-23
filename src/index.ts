@@ -7,13 +7,16 @@ import { Controls } from './core/controls.js';
 import { emptyConfig, Registry, type AppConfig } from './core/registry.js';
 import { JsonStore, ScopedState } from './core/store.js';
 import { plugins } from './plugins/index.js';
-import { newSessionSecret } from './web/auth.js';
+import { newSessionSecret, uiAuthFromEnv } from './web/auth.js';
 import { createWebApp } from './web/app.js';
 
 const env = process.env;
 const dataDir = path.resolve(env.DATA_DIR || './data');
 const port = Number(env.PORT || 8080);
 const publicUrl = env.PUBLIC_URL?.replace(/\/+$/, '') || undefined;
+// Before anything starts, so a bad DISABLE_AUTH value stops the app instead of running it unprotected.
+const uiAuth = uiAuthFromEnv(env);
+const uiPassword = uiAuth.mode === 'password' ? uiAuth.password : undefined;
 
 const logs = new LogBuffer();
 const log = new Logger(logs, 'app', (env.LOG_LEVEL as LogLevel) || 'info');
@@ -41,16 +44,21 @@ await registry.startAll();
 // Signs UI sessions; kept in state.json so sign-ins survive restarts.
 const authState = new ScopedState<{ sessionSecret?: string }>(state, '_auth');
 let sessionSecret = authState.get()?.sessionSecret;
-if (env.UI_PASSWORD && !sessionSecret) {
+if (uiPassword && !sessionSecret) {
   sessionSecret = newSessionSecret();
   await authState.set({ sessionSecret });
 }
 
 const preferences = new ScopedState<{ attentionDismissedAt?: number }>(state, '_ui');
-const app = createWebApp({ registry, hub, logs, env: { publicUrl }, uiPassword: env.UI_PASSWORD || undefined, sessionSecret, controls, history, preferences });
+const app = createWebApp({ registry, hub, logs, env: { publicUrl }, uiPassword, sessionSecret, controls, history, preferences });
 const server = serve({ fetch: app.fetch, port }, (info) => {
   log.info(`Web UI on http://localhost:${info.port} (data in ${dataDir})`);
-  if (!env.UI_PASSWORD) log.warn('UI_PASSWORD is not set; anyone who can reach the web UI can change settings.');
+  if (uiAuth.mode === 'disabled') {
+    log.info('DISABLE_AUTH is set; the web UI expects whatever is in front of it (e.g. a reverse proxy) to authenticate.');
+    if (uiAuth.passwordIgnored) log.warn('UI_PASSWORD is ignored because DISABLE_AUTH is set.');
+  } else if (uiAuth.mode === 'open') {
+    log.warn('UI_PASSWORD is not set; anyone who can reach the web UI can change settings. Set it, or set DISABLE_AUTH=true if a reverse proxy handles sign-in.');
+  }
 });
 
 let shuttingDown = false;

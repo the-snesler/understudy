@@ -11,6 +11,9 @@ services:
     environment:
       # Password for the web UI's sign-in page. Strongly recommended: the UI holds your Discord tokens.
       UI_PASSWORD: change-me
+      # Or, if a reverse proxy in front of Understudy handles sign-in, turn off its own sign-in
+      # instead (UI_PASSWORD is then ignored). Don't publish the port above if you do.
+      # DISABLE_AUTH: "true"
       # The URL you open the UI at, if it differs from what the container sees (e.g. behind a
       # reverse proxy). Used for the Discord OAuth redirect URI.
       # PUBLIC_URL: https://understudy.example.com

@@ -62,10 +62,26 @@ pnpm build
 | `PORT` | `8080` | |
 | `DATA_DIR` | `./data` (`/data` in Docker) | `config.json` (settings), `state.json` (tokens), and `history.sqlite` (activity and feed access). All are mode 600. |
 | `UI_PASSWORD` | unset | Password for the web UI's sign-in page (and the JSON API). Set it: the UI holds your Discord tokens. Changing it signs everyone out. |
+| `DISABLE_AUTH` | `false` | Set to `true` to turn off the sign-in page and the API's basic auth, when a reverse proxy in front of Understudy handles sign-in instead (see [Behind an authenticating proxy](#behind-an-authenticating-proxy)). `UI_PASSWORD` is then ignored. |
 | `PUBLIC_URL` | request origin | The URL you open the UI at, if that differs from what the server sees (e.g. behind a reverse proxy). Used for the OAuth redirect URI, and, if it's public HTTPS, for the optional artwork proxy. |
 | `TZ` | system zone | Default Hub time zone for quiet hours and daily totals (e.g. `America/Chicago`). Set it in Settings → Hub rules; outputs can override their schedule. |
 | `NXAPI_AUTH_CLIENT_ID` | unset | Default nxapi-auth client ID for the Nintendo Switch source. |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error` |
+
+### Behind an authenticating proxy
+
+If a reverse proxy (Authelia, Authentik, oauth2-proxy, Cloudflare Access, …) already signs you in,
+set `DISABLE_AUTH=true` so you don't also need the UI password. Understudy then trusts every request
+that reaches it, so make sure only the proxy can reach it: don't publish its port to the host or
+network.
+
+Let these paths through the proxy without sign-in. They carry their own signatures or tokens:
+
+- `/public/` for artwork Discord loads, webhooks, and the calendar and JSON feeds;
+- `/feed/history.ics` and `/api/history.json` (older feed links);
+- `/healthz` if something monitors it.
+
+For the JSON API, use whatever credentials your proxy accepts instead of the UI password.
 
 ## Discord setup
 
